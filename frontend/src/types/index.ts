@@ -11,6 +11,7 @@ export interface ChatMessage {
   msg_id?: string;
   diffused?: boolean;     // true if this message went through real diffusion
   rewrite_status?: "ok" | "passthrough" | "no_key" | "error";
+  token_estimate?: number; // estimated token count for this message
 }
 
 export interface ToneConfig {
@@ -42,13 +43,70 @@ export interface StatusResponse {
   model: ModelConfig;
 }
 
+// ---------------------------------------------------------------------------
+// User session & stats types (backend auth system)
+// ---------------------------------------------------------------------------
+
+export interface UserSession {
+  user_id: string;
+  username: string;
+  role: "user" | "admin";
+  joined_at: number;
+  last_active: number;
+  total_messages: number;
+  total_tokens_used: number;
+}
+
+export interface StatsResponse {
+  total_messages: number;
+  total_tokens: number;
+  active_users: number;
+  users: UserSession[];
+}
+
+export interface MyStatsResponse {
+  username: string;
+  role: "user" | "admin";
+  total_messages: number;
+  total_tokens_used: number;
+  joined_at: number;
+}
+
+export interface ContextStats {
+  message_count: number;
+  total_tokens: number;
+  max_messages: number;
+  max_tokens_per_user: number;
+}
+
+// ---------------------------------------------------------------------------
+// System message type for UI-only display (joins, leaves, resets)
+// ---------------------------------------------------------------------------
+
+export interface SystemMessage {
+  type: "system";
+  text: string;
+  timestamp: number;
+}
+
+// A display item is either a real chat message or a system notification
+export type DisplayMessage = (ChatMessage & { kind: "chat" }) | (SystemMessage & { kind: "system" });
+
+// ---------------------------------------------------------------------------
+// WebSocket message types
+// ---------------------------------------------------------------------------
+
 /** All possible WebSocket message types from the backend */
 export type WSMessage =
   | WSChatMessage
   | WSDiffusionStart
   | WSDiffusionStep
   | WSToneChange
-  | WSPong;
+  | WSPong
+  | WSContextReset
+  | WSUserJoined
+  | WSUserLeft
+  | WSStatsUpdate;
 
 export interface WSChatMessage {
   type: "chat";
@@ -60,6 +118,7 @@ export interface WSChatMessage {
   tone_name?: string;
   diffused?: boolean;
   rewrite_status?: "ok" | "passthrough" | "no_key" | "error";
+  token_estimate?: number;
 }
 
 export interface WSDiffusionStart {
@@ -89,6 +148,29 @@ export interface WSToneChange {
 
 export interface WSPong {
   type: "pong";
+}
+
+export interface WSContextReset {
+  type: "context_reset";
+}
+
+export interface WSUserJoined {
+  type: "user_joined";
+  username: string;
+  user_count: number;
+}
+
+export interface WSUserLeft {
+  type: "user_left";
+  username: string;
+  user_count: number;
+}
+
+export interface WSStatsUpdate {
+  type: "stats_update";
+  total_messages: number;
+  total_tokens: number;
+  active_users: number;
 }
 
 /**

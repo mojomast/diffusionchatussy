@@ -2,17 +2,21 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import { Chat } from "./components/Chat";
 import { AdminPanel } from "./components/AdminPanel";
 import { useWebSocket } from "./hooks/useWebSocket";
-import { getStatus, getMessages } from "./api";
+import { getStatus, getMessages, joinChat, adminLogin, getMyStats } from "./api";
 import type {
   ChatMessage,
   ToneConfig,
   ModelConfig,
   WSMessage,
   DiffusingMessage,
+  UserSession,
+  DisplayMessage,
+  MyStatsResponse,
 } from "./types";
 
 function App() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [displayMessages, setDisplayMessages] = useState<DisplayMessage[]>([]);
   const [tone, setTone] = useState<ToneConfig | null>(null);
   const [model, setModel] = useState<ModelConfig | null>(null);
   const [username, setUsername] = useState("");
@@ -23,6 +27,18 @@ function App() {
   const [adminPassInput, setAdminPassInput] = useState("");
   const [adminPassError, setAdminPassError] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [joinError, setJoinError] = useState("");
+
+  // Session from backend auth
+  const [session, setSession] = useState<UserSession | null>(null);
+  const [myStats, setMyStats] = useState<MyStatsResponse | null>(null);
+
+  // Live stats from WS stats_update events
+  const [liveStats, setLiveStats] = useState<{
+    total_messages: number;
+    total_tokens: number;
+    active_users: number;
+  }>({ total_messages: 0, total_tokens: 0, active_users: 0 });
 
   // Track messages currently being diffused (real denoising in progress)
   const [diffusing, setDiffusing] = useState<Map<string, DiffusingMessage>>(
@@ -36,17 +52,27 @@ function App() {
   const diffusingRef = useRef(diffusing);
   diffusingRef.current = diffusing;
 
+  // Helper: add a system message to the display
+  const addSystemMessage = useCallback((text: string) => {
+    const sysMsg: DisplayMessage = {
+      kind: "system",
+      type: "system",
+      text,
+      timestamp: Date.now() / 1000,
+    };
+    setDisplayMessages((prev) => [...prev, sysMsg]);
+  }, []);
+
   // Handle incoming WebSocket messages
   const handleWS = useCallback(
     (msg: WSMessage) => {
       switch (msg.type) {
         case "diffusion_start": {
-          // A new message is being diffused — show it in the chat area
           const dm: DiffusingMessage = {
             msg_id: msg.msg_id,
             user: msg.user,
             original: msg.original,
-            currentContent: msg.original, // Start showing original
+            currentContent: msg.original,
             step: 0,
             timestamp: msg.timestamp,
             tone_name: msg.tone_name ?? "",
@@ -61,7 +87,6 @@ function App() {
         }
 
         case "diffusion_step": {
-          // Update the in-flight message with the latest denoised state
           setDiffusing((prev) => {
             const existing = prev.get(msg.msg_id);
             if (!existing) return prev;
@@ -77,7 +102,6 @@ function App() {
         }
 
         case "chat": {
-          // Final resolved message — add to permanent list, remove from diffusing
           const chatMsg: ChatMessage = {
             user: msg.user,
             message: msg.message,
@@ -87,8 +111,13 @@ function App() {
             msg_id: msg.msg_id,
             diffused: msg.diffused,
             rewrite_status: msg.rewrite_status,
+            token_estimate: msg.token_estimate,
           };
           setMessages((prev) => [...prev, chatMsg]);
+
+          // Also add to display messages
+          const displayMsg: DisplayMessage = { ...chatMsg, kind: "chat" };
+          setDisplayMessages((prev) => [...prev, displayMsg]);
 
           // Remove from in-flight diffusion if it was being tracked
           if (msg.msg_id) {
@@ -112,11 +141,40 @@ function App() {
           break;
         }
 
+        case "context_reset": {
+          // Admin cleared all chat history
+          setMessages([]);
+          setDisplayMessages([]);
+          addSystemMessage("Chat history cleared by admin");
+          break;
+        }
+
+        case "user_joined": {
+          addSystemMessage(`${msg.username} joined the chat`);
+          setLiveStats((prev) => ({ ...prev, active_users: msg.user_count }));
+          break;
+        }
+
+        case "user_left": {
+          addSystemMessage(`${msg.username} left the chat`);
+          setLiveStats((prev) => ({ ...prev, active_users: msg.user_count }));
+          break;
+        }
+
+        case "stats_update": {
+          setLiveStats({
+            total_messages: msg.total_messages,
+            total_tokens: msg.total_tokens,
+            active_users: msg.active_users,
+          });
+          break;
+        }
+
         case "pong":
           break;
       }
     },
-    []
+    [addSystemMessage]
   );
 
   const { connected } = useWebSocket(handleWS);
@@ -127,23 +185,62 @@ function App() {
       .then((s) => {
         setTone(s.tone);
         setModel(s.model);
+        setLiveStats((prev) => ({
+          ...prev,
+          total_messages: s.message_count,
+          active_users: s.connected_clients,
+        }));
       })
       .catch(console.error);
 
     getMessages()
       .then((msgs) => {
-        setMessages(
-          msgs.map((m) => ({
-            user: m.user,
-            message: m.rewritten,
-            original: m.original,
-            timestamp: m.timestamp,
-            tone_name: m.tone_name,
-          }))
+        const chatMsgs: ChatMessage[] = msgs.map((m) => ({
+          user: m.user,
+          message: m.rewritten,
+          original: m.original,
+          timestamp: m.timestamp,
+          tone_name: m.tone_name,
+          token_estimate: m.token_estimate,
+        }));
+        setMessages(chatMsgs);
+        setDisplayMessages(
+          chatMsgs.map((cm) => ({ ...cm, kind: "chat" as const }))
         );
       })
       .catch(console.error);
   }, []);
+
+  // Periodically refresh personal stats when in chat
+  useEffect(() => {
+    if (!enteredChat) return;
+    const fetchStats = () => {
+      getMyStats().then(setMyStats).catch(() => { /* ignore if endpoint not available */ });
+    };
+    fetchStats();
+    const interval = setInterval(fetchStats, 15000);
+    return () => clearInterval(interval);
+  }, [enteredChat]);
+
+  // Handle join — calls backend auth
+  const handleJoin = async () => {
+    const trimmed = username.trim();
+    if (!trimmed) return;
+    setJoinError("");
+    try {
+      const userSession = await joinChat(trimmed);
+      setSession(userSession);
+      setAdminAuthed(userSession.role === "admin");
+      setEnteredChat(true);
+    } catch (err) {
+      // Fallback: if auth endpoint doesn't exist yet, join client-side only
+      if (err instanceof Error && err.message.includes("404")) {
+        setEnteredChat(true);
+      } else {
+        setJoinError(err instanceof Error ? err.message : "Failed to join");
+      }
+    }
+  };
 
   // Username entry screen
   if (!enteredChat) {
@@ -154,7 +251,7 @@ function App() {
             ToneChat
           </h1>
           <p className="text-sm text-gray-500 mb-8 text-center">
-            Every message reshaped by the room's vibe
+            Every message reshaped by the room&apos;s vibe
           </p>
 
           <div className="space-y-4">
@@ -164,7 +261,7 @@ function App() {
               onChange={(e) => setUsername(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && username.trim()) {
-                  setEnteredChat(true);
+                  handleJoin();
                 }
               }}
               placeholder="Enter your name"
@@ -174,15 +271,16 @@ function App() {
                          focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
             />
             <button
-              onClick={() => {
-                if (username.trim()) setEnteredChat(true);
-              }}
+              onClick={handleJoin}
               disabled={!username.trim()}
               className="w-full px-4 py-3 bg-indigo-600 text-white text-sm font-medium rounded-lg
                          hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
             >
               Join Chat
             </button>
+            {joinError && (
+              <p className="text-xs text-red-400 text-center">{joinError}</p>
+            )}
           </div>
 
           <div className="mt-6 flex items-center justify-center gap-2 text-xs text-gray-600">
@@ -196,14 +294,27 @@ function App() {
     );
   }
 
-  const handleAdminLogin = () => {
-    if (adminPassInput === "h4x0r") {
+  const handleAdminLogin = async () => {
+    setAdminPassError(false);
+    try {
+      const updatedSession = await adminLogin(adminPassInput);
+      setSession(updatedSession);
       setAdminAuthed(true);
       setShowAdmin(true);
-      setAdminPassError(false);
       setAdminPassInput("");
-    } else {
-      setAdminPassError(true);
+    } catch (err) {
+      // Fallback: if auth endpoint doesn't exist, try client-side check
+      if (err instanceof Error && err.message.includes("404")) {
+        if (adminPassInput === "h4x0r") {
+          setAdminAuthed(true);
+          setShowAdmin(true);
+          setAdminPassInput("");
+        } else {
+          setAdminPassError(true);
+        }
+      } else {
+        setAdminPassError(true);
+      }
     }
   };
 
@@ -225,9 +336,33 @@ function App() {
           <span
             className={`w-2 h-2 rounded-full ${connected ? "bg-green-500" : "bg-red-500"}`}
           />
+          {/* Live stats bar */}
+          <div className="hidden sm:flex items-center gap-2 text-xs text-gray-500">
+            <span className="font-mono">{liveStats.total_messages}</span>
+            <span className="text-gray-700">msgs</span>
+            <span className="text-gray-700">·</span>
+            <span className="font-mono">{liveStats.total_tokens.toLocaleString()}</span>
+            <span className="text-gray-700">tokens</span>
+            <span className="text-gray-700">·</span>
+            <span className="font-mono">{liveStats.active_users}</span>
+            <span className="text-gray-700">online</span>
+          </div>
         </div>
         <div className="flex items-center gap-2">
-          <span className="text-xs text-gray-500">{username}</span>
+          {/* User info with role badge */}
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs text-gray-500">{username}</span>
+            {session?.role === "admin" && (
+              <span className="px-1.5 py-0.5 text-[10px] rounded bg-purple-600/30 text-purple-300 border border-purple-500/30">
+                admin
+              </span>
+            )}
+            {myStats && (
+              <span className="text-[10px] text-gray-600 font-mono">
+                ({myStats.total_messages} msgs / {myStats.total_tokens_used.toLocaleString()} tok)
+              </span>
+            )}
+          </div>
           <button
             onClick={() => setShowSettings(!showSettings)}
             className={`px-3 py-1 text-xs rounded-md border transition-colors ${
@@ -259,12 +394,14 @@ function App() {
         >
           <Chat
             messages={messages}
+            displayMessages={displayMessages}
             diffusing={diffusing}
             tone={tone}
             username={username}
             showOriginals={showOriginals}
             pipeline={pipeline}
             onPipelineChange={setPipeline}
+            liveStats={liveStats}
           />
         </div>
 
@@ -349,6 +486,26 @@ function App() {
                   </label>
                 </div>
               </section>
+
+              {/* Personal stats */}
+              {myStats && (
+                <section>
+                  <h3 className="text-sm font-semibold text-gray-300 mb-2 uppercase tracking-wide">
+                    Your Stats
+                  </h3>
+                  <div className="text-xs text-gray-500 space-y-1">
+                    <div>
+                      Messages: <span className="font-mono text-gray-400">{myStats.total_messages}</span>
+                    </div>
+                    <div>
+                      Tokens used: <span className="font-mono text-gray-400">{myStats.total_tokens_used.toLocaleString()}</span>
+                    </div>
+                    <div>
+                      Role: <span className={myStats.role === "admin" ? "text-purple-400" : "text-gray-400"}>{myStats.role}</span>
+                    </div>
+                  </div>
+                </section>
+              )}
 
               {tone && (
                 <section>

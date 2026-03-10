@@ -1,34 +1,55 @@
 import { useState, useRef, useEffect } from "react";
-import type { ChatMessage, ToneConfig, DiffusingMessage } from "../types";
+import type { ChatMessage, ToneConfig, DiffusingMessage, DisplayMessage } from "../types";
 import { sendMessage } from "../api";
 import { DiffusionText } from "./DiffusionText";
 
 interface ChatProps {
   messages: ChatMessage[];
+  displayMessages: DisplayMessage[];
   diffusing: Map<string, DiffusingMessage>;
   tone: ToneConfig | null;
   username: string;
   showOriginals: boolean;
   pipeline: string | null;
   onPipelineChange: (p: string | null) => void;
+  liveStats: {
+    total_messages: number;
+    total_tokens: number;
+    active_users: number;
+  };
 }
 
 export function Chat({
   messages,
+  displayMessages,
   diffusing,
   tone,
   username,
   showOriginals,
   pipeline,
   onPipelineChange,
+  liveStats,
 }: ChatProps) {
   const [input, setInput] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   // Auto-scroll
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, diffusing]);
+  }, [displayMessages, diffusing]);
+
+  // Auto-focus the chat input on mount (after joining)
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
+
+  // Restore focus when pipeline clears (message sent and processed)
+  useEffect(() => {
+    if (!pipeline) {
+      inputRef.current?.focus();
+    }
+  }, [pipeline]);
 
   const handleSend = async () => {
     const text = input.trim();
@@ -59,7 +80,7 @@ export function Chat({
 
   const isBusy = pipeline === "rewriting" || pipeline === "diffusing";
 
-  // Combine resolved messages and in-flight diffusing messages for display
+  // In-flight diffusing messages for display
   const diffusingArray = Array.from(diffusing.values());
 
   return (
@@ -79,20 +100,53 @@ export function Chat({
         </span>
       </div>
 
+      {/* Stats bar */}
+      <div className="flex items-center justify-between px-4 py-1.5 border-b border-gray-800/50 bg-gray-900/30">
+        <div className="flex items-center gap-3 text-xs text-gray-500">
+          <span>
+            <span className="font-mono text-gray-400">{liveStats.total_messages}</span> messages
+          </span>
+          <span className="text-gray-700">|</span>
+          <span>
+            ~<span className="font-mono text-gray-400">{liveStats.total_tokens.toLocaleString()}</span> tokens
+          </span>
+          <span className="text-gray-700">|</span>
+          <span>
+            <span className="font-mono text-gray-400">{liveStats.active_users}</span> user{liveStats.active_users !== 1 ? "s" : ""} online
+          </span>
+        </div>
+      </div>
+
       {/* Messages */}
       <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
-        {messages.length === 0 && diffusingArray.length === 0 && (
+        {displayMessages.length === 0 && diffusingArray.length === 0 && (
           <div className="flex items-center justify-center h-full text-gray-600 text-sm">
             No messages yet. Say something — the room will reshape your words.
           </div>
         )}
 
-        {/* Resolved messages */}
-        {messages.map((msg, i) => {
+        {/* Display messages (chat + system) */}
+        {displayMessages.map((item, i) => {
+          if (item.kind === "system") {
+            // System message (join, leave, reset)
+            return (
+              <div
+                key={`sys-${item.timestamp}-${i}`}
+                className="flex justify-center"
+              >
+                <span className="px-3 py-1 text-xs text-gray-500 bg-gray-800/40 rounded-full">
+                  {item.text}
+                </span>
+              </div>
+            );
+          }
+
+          // Regular chat message
+          const msg = item;
           const isMe = msg.user === username;
           return (
             <div
-              key={`${msg.timestamp}-${i}`}
+              key={`${msg.msg_id ?? msg.timestamp}-${i}`}
               className={`flex flex-col ${isMe ? "items-end" : "items-start"}`}
             >
               <div className="flex items-center gap-2 mb-1">
@@ -102,6 +156,11 @@ export function Chat({
                 <span className="text-xs text-gray-600">
                   {formatTime(msg.timestamp)}
                 </span>
+                {msg.token_estimate != null && (
+                  <span className="text-[10px] text-gray-600 font-mono">
+                    ~{msg.token_estimate} tok
+                  </span>
+                )}
                 {msg.tone_name && (
                   <span className="text-xs text-gray-700">
                     [{msg.tone_name}]
@@ -223,6 +282,7 @@ export function Chat({
       <div className="border-t border-gray-800 bg-gray-900/50 px-4 py-3">
         <div className="flex gap-2">
           <input
+            ref={inputRef}
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}

@@ -2,16 +2,24 @@
 Tone-Field Chat — Configuration
 
 Holds all runtime configuration for tone profiles, model settings,
-and provider definitions. Everything lives in memory for the PoC,
-with optional .env loading for API keys.
+provider definitions, user sessions, and rate limiting.
+Everything lives in memory for the PoC, with optional .env loading for API keys.
 """
 
 from __future__ import annotations
 
 import os
+import time
 from typing import Optional
 
 from pydantic import BaseModel, Field
+
+
+# ---------------------------------------------------------------------------
+# Admin password (configurable via env var)
+# ---------------------------------------------------------------------------
+
+ADMIN_PASSWORD: str = os.getenv("ADMIN_PASSWORD", "h4x0r")
 
 
 # ---------------------------------------------------------------------------
@@ -70,6 +78,74 @@ TONE_PRESETS: dict[str, str] = {
     "concise": "Extremely brief. Strip all fluff. Get to the point.",
     "poetic": "Lyrical, metaphorical, and expressive. Beauty in language.",
 }
+
+
+# ---------------------------------------------------------------------------
+# Recommended OpenRouter models for tone rewriting
+# ---------------------------------------------------------------------------
+# Criteria: cheap, fast, creative, instruction-following, minimal censorship.
+# Each message = 1 LLM call, so cost and latency are critical.
+
+OPENROUTER_FAVORITES: list[dict[str, str]] = [
+    {
+        "id": "inception/mercury-2",
+        "name": "Inception: Mercury 2",
+        "why": "The default. Fastest model on OpenRouter (~1000 tok/s), diffusion LLM, very cheap. Great at short rewrites.",
+    },
+    {
+        "id": "google/gemini-2.0-flash-001",
+        "name": "Google: Gemini 2.0 Flash",
+        "why": "Extremely fast, 1M context, strong instruction following. $0.10/$0.40 per 1M tokens.",
+    },
+    {
+        "id": "google/gemini-2.5-flash-lite",
+        "name": "Google: Gemini 2.5 Flash Lite",
+        "why": "Cheapest Gemini, ultra-low latency. Great for high-volume chat rewriting.",
+    },
+    {
+        "id": "openai/gpt-4o-mini",
+        "name": "OpenAI: GPT-4o-mini",
+        "why": "Reliable instruction follower, fast, affordable. Won't refuse most creative rewrites.",
+    },
+    {
+        "id": "openai/gpt-4.1-nano",
+        "name": "OpenAI: GPT-4.1 Nano",
+        "why": "Fastest and cheapest GPT. $0.10/$0.40 per 1M tokens, 1M context. Built for low-latency.",
+    },
+    {
+        "id": "mistralai/mistral-small-3.2-24b-instruct",
+        "name": "Mistral: Mistral Small 3.2 24B",
+        "why": "Fast 24B model, excellent at style tasks. Less censored than OpenAI. $0.06/$0.18 per 1M.",
+    },
+    {
+        "id": "meta-llama/llama-3.3-70b-instruct",
+        "name": "Meta: Llama 3.3 70B Instruct",
+        "why": "Strong open model, great creative writing. Low censorship. $0.10/$0.32 per 1M.",
+    },
+    {
+        "id": "qwen/qwen3-30b-a3b",
+        "name": "Qwen: Qwen3 30B A3B",
+        "why": "MoE with only 3B active params = very fast. Strong multilingual style transfer. $0.08/$0.28 per 1M.",
+    },
+    {
+        "id": "deepseek/deepseek-chat",
+        "name": "DeepSeek: DeepSeek V3",
+        "why": "671B MoE powerhouse, great at nuanced rewrites. $0.32/$0.89 per 1M — still cheap per message.",
+    },
+    {
+        "id": "mistralai/mistral-small-creative",
+        "name": "Mistral: Mistral Small Creative",
+        "why": "Purpose-built for creative writing and roleplay. Ideal for poetic/chaotic tones. $0.10/$0.30 per 1M.",
+    },
+]
+
+
+# ---------------------------------------------------------------------------
+# Rate limiting config
+# ---------------------------------------------------------------------------
+
+RATE_LIMIT_MAX_MESSAGES: int = 10
+RATE_LIMIT_WINDOW_SECONDS: float = 60.0
 
 
 # ---------------------------------------------------------------------------
@@ -149,7 +225,8 @@ class ModelConfig(BaseModel):
 class AppState:
     """
     In-memory application state.
-    Holds messages, tone config, model config, and connected clients.
+    Holds messages, tone config, model config, connected clients,
+    user sessions, rate limits, and global stats.
     """
 
     def __init__(self) -> None:
@@ -157,6 +234,26 @@ class AppState:
         self.model = ModelConfig()
         self.messages: list[dict] = []
         self.websocket_clients: list = []
+
+        # --- User sessions: session_id -> user info dict ---
+        # Each user dict: {user_id, username, role, joined_at, last_active,
+        #                   total_messages, total_tokens_used}
+        self.users: dict[str, dict] = {}
+
+        # --- Context management settings ---
+        self.context_settings: dict[str, int] = {
+            "max_messages": 500,
+            "max_tokens_per_user": 100000,
+        }
+
+        # --- Rate limiting: session_id -> list of message timestamps ---
+        self.rate_limits: dict[str, list[float]] = {}
+
+        # --- Global stats ---
+        self.global_stats: dict[str, int] = {
+            "total_tokens": 0,
+            "total_messages": 0,
+        }
 
         # Try to pick up API key from environment
         env_key = os.getenv("LLM_API_KEY", "")
@@ -218,10 +315,103 @@ class AppState:
         return self.model
 
     def add_message(self, msg: dict) -> None:
+        """Add a message, enforcing max_messages context limit."""
         self.messages.append(msg)
+        max_msgs = self.context_settings["max_messages"]
+        if len(self.messages) > max_msgs:
+            # Drop the oldest messages to stay within the limit
+            overflow = len(self.messages) - max_msgs
+            self.messages = self.messages[overflow:]
 
     def get_messages(self, limit: int = 100) -> list[dict]:
         return self.messages[-limit:]
+
+    # --- Rate limiting helpers ---
+
+    def check_rate_limit(self, session_id: str) -> bool:
+        """
+        Check if a user has exceeded the rate limit.
+        Returns True if the user is within limits, False if rate-limited.
+        """
+        now = time.time()
+        window = RATE_LIMIT_WINDOW_SECONDS
+
+        if session_id not in self.rate_limits:
+            self.rate_limits[session_id] = []
+
+        # Prune timestamps outside the window
+        self.rate_limits[session_id] = [
+            ts for ts in self.rate_limits[session_id]
+            if now - ts < window
+        ]
+
+        if len(self.rate_limits[session_id]) >= RATE_LIMIT_MAX_MESSAGES:
+            return False  # Rate limited
+
+        # Record this message timestamp
+        self.rate_limits[session_id].append(now)
+        return True
+
+    # --- User session helpers ---
+
+    def get_or_create_user(self, session_id: str, username: str = "Anonymous") -> dict:
+        """Get existing user or create a new one for this session."""
+        if session_id in self.users:
+            user = self.users[session_id]
+            user["last_active"] = time.time()
+            return user
+
+        user = {
+            "user_id": session_id,
+            "username": username,
+            "role": "user",
+            "joined_at": time.time(),
+            "last_active": time.time(),
+            "total_messages": 0,
+            "total_tokens_used": 0,
+        }
+        self.users[session_id] = user
+        return user
+
+    def get_user(self, session_id: str) -> Optional[dict]:
+        """Get user by session ID, or None if not found."""
+        return self.users.get(session_id)
+
+    def remove_user(self, session_id: str) -> bool:
+        """Remove a user session. Returns True if removed."""
+        if session_id in self.users:
+            del self.users[session_id]
+            # Also clean up rate limits
+            self.rate_limits.pop(session_id, None)
+            return True
+        return False
+
+    def update_user_stats(self, session_id: str, tokens_used: int) -> None:
+        """Update token and message stats for a user and globally."""
+        user = self.users.get(session_id)
+        if user:
+            user["total_messages"] += 1
+            user["total_tokens_used"] += tokens_used
+            user["last_active"] = time.time()
+
+        self.global_stats["total_messages"] += 1
+        self.global_stats["total_tokens"] += tokens_used
+
+    def check_token_limit(self, session_id: str) -> bool:
+        """
+        Check if a user has exceeded their token limit.
+        Returns True if within limits, False if exceeded.
+        """
+        user = self.users.get(session_id)
+        if not user:
+            return True  # No user record = no limit enforced yet
+        max_tokens = self.context_settings["max_tokens_per_user"]
+        return user["total_tokens_used"] < max_tokens
+
+    def get_active_user_count(self) -> int:
+        """Count users active in the last 5 minutes."""
+        cutoff = time.time() - 300  # 5 minutes
+        return sum(1 for u in self.users.values() if u["last_active"] > cutoff)
 
 
 # Singleton — imported by other modules

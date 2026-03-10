@@ -1,11 +1,20 @@
-import { useState, useEffect } from "react";
-import type { ToneConfig, ModelConfig } from "../types";
+import { useState, useEffect, useRef, useCallback } from "react";
+import type { ToneConfig, ModelConfig, UserSession, ContextStats } from "../types";
 import {
   setTone,
   setModel,
   getTonePresets,
   getProviderPresets,
+  searchOpenRouterModels,
+  getOpenRouterFavorites,
+  getContextStats,
+  resetContext,
+  setContextSettings,
+  getUsers,
+  setUserRole,
+  kickUser,
 } from "../api";
+import type { OpenRouterModel, OpenRouterFavorite } from "../api";
 
 interface AdminPanelProps {
   tone: ToneConfig | null;
@@ -50,10 +59,81 @@ export function AdminPanel({
   const [saving, setSaving] = useState(false);
   const [expanded, setExpanded] = useState(false);
 
+  // --- Context management state ---
+  const [contextStats, setContextStats] = useState<ContextStats | null>(null);
+  const [ctxMaxMessages, setCtxMaxMessages] = useState(500);
+  const [ctxMaxTokens, setCtxMaxTokens] = useState(100000);
+  const [confirmReset, setConfirmReset] = useState(false);
+  const [ctxSaving, setCtxSaving] = useState(false);
+
+  // --- User management state ---
+  const [users, setUsers] = useState<UserSession[]>([]);
+  const [usersLoading, setUsersLoading] = useState(false);
+
+  // OpenRouter model search state
+  const [modelSearchQuery, setModelSearchQuery] = useState("");
+  const [modelSearchResults, setModelSearchResults] = useState<OpenRouterModel[]>([]);
+  const [modelSearchTotal, setModelSearchTotal] = useState(0);
+  const [modelSearching, setModelSearching] = useState(false);
+  const [showModelSearch, setShowModelSearch] = useState(false);
+  const [favorites, setFavorites] = useState<OpenRouterFavorite[]>([]);
+  const searchTimeoutRef = useRef<ReturnType<typeof window.setTimeout> | null>(null);
+
+  // Debounced search for OpenRouter models
+  const doModelSearch = useCallback(async (query: string) => {
+    setModelSearching(true);
+    try {
+      const res = await searchOpenRouterModels(query, 30);
+      setModelSearchResults(res.models);
+      setModelSearchTotal(res.total);
+    } catch (err) {
+      console.error("Model search failed:", err);
+    } finally {
+      setModelSearching(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!showModelSearch) return;
+    if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
+    searchTimeoutRef.current = window.setTimeout(() => {
+      doModelSearch(modelSearchQuery);
+    }, 300);
+    return () => {
+      if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
+    };
+  }, [modelSearchQuery, showModelSearch, doModelSearch]);
+
   // Load presets on mount
   useEffect(() => {
     getTonePresets().then(setTonePresets).catch(console.error);
     getProviderPresets().then(setProviderPresets).catch(console.error);
+    getOpenRouterFavorites()
+      .then((res) => setFavorites(res.favorites))
+      .catch(console.error);
+  }, []);
+
+  // Load context stats and users on mount, auto-refresh every 10s
+  useEffect(() => {
+    const fetchAdmin = () => {
+      getContextStats()
+        .then((stats) => {
+          setContextStats(stats);
+          setCtxMaxMessages(stats.max_messages);
+          setCtxMaxTokens(stats.max_tokens_per_user);
+        })
+        .catch(() => { /* endpoint may not exist yet */ });
+      setUsersLoading(true);
+      getUsers()
+        .then((data) => {
+          setUsers(data.users ?? []);
+        })
+        .catch(() => { /* ignore */ })
+        .finally(() => setUsersLoading(false));
+    };
+    fetchAdmin();
+    const interval = setInterval(fetchAdmin, 10000);
+    return () => clearInterval(interval);
   }, []);
 
   // Sync from props
@@ -130,6 +210,63 @@ export function AdminPanel({
     } finally {
       setSaving(false);
     }
+  };
+
+  // --- Context management handlers ---
+  const handleResetContext = async () => {
+    try {
+      await resetContext();
+      setConfirmReset(false);
+      // Refresh stats
+      getContextStats().then(setContextStats).catch(() => {});
+    } catch (err) {
+      console.error("Failed to reset context:", err);
+    }
+  };
+
+  const handleSaveContextSettings = async () => {
+    setCtxSaving(true);
+    try {
+      await setContextSettings({
+        max_messages: ctxMaxMessages,
+        max_tokens_per_user: ctxMaxTokens,
+      });
+      // Refresh stats
+      getContextStats().then(setContextStats).catch(() => { /* ignore */ });
+    } catch (err) {
+      console.error("Failed to save context settings:", err);
+    } finally {
+      setCtxSaving(false);
+    }
+  };
+
+  // --- User management handlers ---
+  const handleSetRole = async (userId: string, role: "user" | "admin") => {
+    try {
+      await setUserRole(userId, role);
+      setUsers((prev) =>
+        prev.map((u) => (u.user_id === userId ? { ...u, role } : u))
+      );
+    } catch (err) {
+      console.error("Failed to set role:", err);
+    }
+  };
+
+  const handleKick = async (userId: string) => {
+    try {
+      await kickUser(userId);
+      setUsers((prev) => prev.filter((u) => u.user_id !== userId));
+    } catch (err) {
+      console.error("Failed to kick user:", err);
+    }
+  };
+
+  const formatRelativeTime = (ts: number) => {
+    const seconds = Math.floor(Date.now() / 1000 - ts);
+    if (seconds < 60) return "just now";
+    if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+    if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+    return `${Math.floor(seconds / 86400)}d ago`;
   };
 
   const labelClass = "block text-xs font-medium text-gray-400 mb-1";
@@ -256,6 +393,146 @@ export function AdminPanel({
                 className={inputClass}
                 placeholder="e.g. mercury-2"
               />
+              {provider === "openrouter" && (
+                <button
+                  onClick={() => {
+                    setShowModelSearch(!showModelSearch);
+                    if (!showModelSearch && modelSearchResults.length === 0) {
+                      doModelSearch("");
+                    }
+                  }}
+                  className="mt-1.5 text-xs text-indigo-400 hover:text-indigo-300 transition-colors"
+                >
+                  {showModelSearch ? "Close model browser" : "Browse OpenRouter models..."}
+                </button>
+              )}
+
+              {/* OpenRouter model search dropdown */}
+              {showModelSearch && provider === "openrouter" && (
+                <div className="mt-2 border border-gray-700 rounded-lg bg-gray-900/80 overflow-hidden">
+                  <div className="p-2 border-b border-gray-800">
+                    <input
+                      type="text"
+                      value={modelSearchQuery}
+                      onChange={(e) => setModelSearchQuery(e.target.value)}
+                      className="w-full bg-gray-800 text-white text-xs rounded px-2.5 py-1.5 border border-gray-700 
+                                 focus:outline-none focus:border-indigo-500 transition-colors"
+                      placeholder="Search models... (e.g. claude, llama, gpt)"
+                      autoFocus
+                    />
+                  </div>
+                  <div className="max-h-72 overflow-y-auto">
+                    {/* Favorites section — shown when search is empty */}
+                    {!modelSearchQuery && favorites.length > 0 && (
+                      <>
+                        <div className="px-3 py-1.5 bg-gray-800/50 border-b border-gray-800">
+                          <span className="text-xs font-semibold text-amber-400/80 uppercase tracking-wide">
+                            Recommended for ToneChat
+                          </span>
+                        </div>
+                        {favorites.map((fav) => {
+                          const isSelected = modelName === fav.id;
+                          return (
+                            <button
+                              key={fav.id}
+                              onClick={() => {
+                                setModelName(fav.id);
+                                setShowModelSearch(false);
+                                setModelSearchQuery("");
+                              }}
+                              className={`w-full text-left px-3 py-2 text-xs border-b border-gray-800/50 
+                                          hover:bg-gray-800 transition-colors ${
+                                            isSelected ? "bg-indigo-900/30 border-l-2 border-l-indigo-500" : ""
+                                          }`}
+                            >
+                              <div className="flex items-center gap-1.5">
+                                <span className="text-amber-400/60">*</span>
+                                <span className="font-medium text-gray-200 truncate">
+                                  {fav.name}
+                                </span>
+                              </div>
+                              <div className="text-gray-600 truncate mt-0.5 ml-4">
+                                {fav.id}
+                              </div>
+                              <div className="text-gray-500 mt-0.5 ml-4 leading-snug">
+                                {fav.why}
+                              </div>
+                            </button>
+                          );
+                        })}
+                        <div className="px-3 py-1.5 bg-gray-800/50 border-b border-gray-800">
+                          <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                            All Models
+                          </span>
+                          <span className="text-xs text-gray-600 ml-2">
+                            {modelSearching
+                              ? "loading..."
+                              : `${modelSearchTotal} available`}
+                          </span>
+                        </div>
+                      </>
+                    )}
+                    {/* Search status when query is active */}
+                    {modelSearchQuery && (
+                      <div className="px-3 py-1.5 bg-gray-800/50 border-b border-gray-800">
+                        <span className="text-xs text-gray-500">
+                          {modelSearching
+                            ? "Searching..."
+                            : `${modelSearchTotal} result${modelSearchTotal !== 1 ? "s" : ""}`}
+                        </span>
+                      </div>
+                    )}
+                    {/* Search results / all models */}
+                    {modelSearchResults.map((m) => {
+                      const promptCost = parseFloat(m.prompt_price) * 1_000_000;
+                      const completionCost = parseFloat(m.completion_price) * 1_000_000;
+                      const isSelected = modelName === m.id;
+                      return (
+                        <button
+                          key={m.id}
+                          onClick={() => {
+                            setModelName(m.id);
+                            setShowModelSearch(false);
+                            setModelSearchQuery("");
+                          }}
+                          className={`w-full text-left px-3 py-2 text-xs border-b border-gray-800/50 
+                                      hover:bg-gray-800 transition-colors ${
+                                        isSelected ? "bg-indigo-900/30 border-l-2 border-l-indigo-500" : ""
+                                      }`}
+                        >
+                          <div className="font-medium text-gray-200 truncate">
+                            {m.name}
+                          </div>
+                          <div className="flex items-center gap-2 mt-0.5 text-gray-500">
+                            <span className="text-gray-600 truncate">{m.id}</span>
+                            <span className="text-gray-700">|</span>
+                            <span>{(m.context_length / 1000).toFixed(0)}k ctx</span>
+                            {promptCost > 0 && (
+                              <>
+                                <span className="text-gray-700">|</span>
+                                <span>
+                                  ${promptCost.toFixed(2)}/{completionCost.toFixed(2)} per 1M
+                                </span>
+                              </>
+                            )}
+                            {promptCost === 0 && (
+                              <>
+                                <span className="text-gray-700">|</span>
+                                <span className="text-green-500">free</span>
+                              </>
+                            )}
+                          </div>
+                        </button>
+                      );
+                    })}
+                    {modelSearchResults.length === 0 && !modelSearching && (
+                      <div className="px-3 py-4 text-xs text-gray-600 text-center">
+                        No models found
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
 
             <div>
@@ -437,6 +714,173 @@ export function AdminPanel({
               Show original messages
             </span>
           </label>
+        </section>
+
+        {/* ---- CONTEXT MANAGEMENT ---- */}
+        <section>
+          <h3 className="text-sm font-semibold text-gray-300 mb-3 uppercase tracking-wide">
+            Context Management
+          </h3>
+          <div className="space-y-3">
+            {/* Current stats */}
+            {contextStats && (
+              <div className="border border-gray-800 rounded-lg p-3 bg-gray-900/30 space-y-1">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-gray-500">Messages</span>
+                  <span className="font-mono text-gray-300">
+                    {contextStats.message_count}
+                    <span className="text-gray-600"> / {contextStats.max_messages}</span>
+                  </span>
+                </div>
+                <div className="w-full bg-gray-800 rounded-full h-1.5">
+                  <div
+                    className="bg-indigo-500 h-1.5 rounded-full transition-all"
+                    style={{
+                      width: `${Math.min(100, (contextStats.message_count / contextStats.max_messages) * 100)}%`,
+                    }}
+                  />
+                </div>
+                <div className="flex items-center justify-between text-xs mt-2">
+                  <span className="text-gray-500">Total tokens</span>
+                  <span className="font-mono text-gray-300">
+                    {contextStats.total_tokens.toLocaleString()}
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {/* Limits */}
+            <div>
+              <label className={labelClass}>
+                Max Messages: <span className="font-mono">{ctxMaxMessages}</span>
+              </label>
+              <input
+                type="range"
+                min={50}
+                max={2000}
+                step={50}
+                value={ctxMaxMessages}
+                onChange={(e) => setCtxMaxMessages(Number(e.target.value))}
+                className="w-full accent-indigo-500"
+              />
+            </div>
+            <div>
+              <label className={labelClass}>
+                Max Tokens/User: <span className="font-mono">{ctxMaxTokens.toLocaleString()}</span>
+              </label>
+              <input
+                type="range"
+                min={10000}
+                max={500000}
+                step={10000}
+                value={ctxMaxTokens}
+                onChange={(e) => setCtxMaxTokens(Number(e.target.value))}
+                className="w-full accent-indigo-500"
+              />
+            </div>
+
+            <button
+              onClick={handleSaveContextSettings}
+              disabled={ctxSaving}
+              className={`${btnClass} bg-emerald-600 text-white hover:bg-emerald-500`}
+            >
+              {ctxSaving ? "Saving..." : "Apply Limits"}
+            </button>
+
+            {/* Reset button */}
+            {!confirmReset ? (
+              <button
+                onClick={() => setConfirmReset(true)}
+                className={`${btnClass} bg-red-900/30 text-red-400 border border-red-500/30 hover:bg-red-900/50`}
+              >
+                Reset Chat History
+              </button>
+            ) : (
+              <div className="flex gap-2">
+                <button
+                  onClick={handleResetContext}
+                  className="flex-1 px-3 py-2 text-xs font-medium rounded-lg bg-red-600 text-white hover:bg-red-500 transition-colors"
+                >
+                  Confirm Reset
+                </button>
+                <button
+                  onClick={() => setConfirmReset(false)}
+                  className="flex-1 px-3 py-2 text-xs font-medium rounded-lg bg-gray-800 text-gray-400 hover:bg-gray-700 transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
+          </div>
+        </section>
+
+        {/* ---- USER MANAGEMENT ---- */}
+        <section>
+          <h3 className="text-sm font-semibold text-gray-300 mb-3 uppercase tracking-wide">
+            Users
+            {usersLoading && (
+              <span className="ml-2 text-gray-600 font-normal normal-case">loading...</span>
+            )}
+          </h3>
+          <div className="space-y-2">
+            {users.length === 0 && !usersLoading && (
+              <p className="text-xs text-gray-600">No active users</p>
+            )}
+            {users.map((u) => (
+              <div
+                key={u.user_id}
+                className="border border-gray-800 rounded-lg p-2.5 bg-gray-900/30"
+              >
+                <div className="flex items-center justify-between mb-1">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-xs font-medium text-gray-200">
+                      {u.username}
+                    </span>
+                    <span
+                      className={`px-1.5 py-0.5 text-[10px] rounded ${
+                        u.role === "admin"
+                          ? "bg-purple-600/30 text-purple-300 border border-purple-500/30"
+                          : "bg-gray-800 text-gray-500 border border-gray-700"
+                      }`}
+                    >
+                      {u.role}
+                    </span>
+                  </div>
+                  <span className="text-[10px] text-gray-600">
+                    {formatRelativeTime(u.last_active)}
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-3 text-[10px] text-gray-500 mb-2">
+                  <span>
+                    <span className="font-mono text-gray-400">{u.total_messages}</span> msgs
+                  </span>
+                  <span>
+                    <span className="font-mono text-gray-400">{u.total_tokens_used.toLocaleString()}</span> tok
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <select
+                    value={u.role}
+                    onChange={(e) =>
+                      handleSetRole(u.user_id, e.target.value as "user" | "admin")
+                    }
+                    className="flex-1 bg-gray-800 text-gray-300 text-[10px] rounded px-1.5 py-1 border border-gray-700 focus:outline-none focus:border-indigo-500"
+                  >
+                    <option value="user">user</option>
+                    <option value="admin">admin</option>
+                  </select>
+                  <button
+                    onClick={() => handleKick(u.user_id)}
+                    className="px-2 py-1 text-[10px] rounded bg-red-900/30 text-red-400 border border-red-500/30 hover:bg-red-900/50 transition-colors"
+                  >
+                    Kick
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
         </section>
 
         {/* ---- STATUS ---- */}

@@ -1,7 +1,7 @@
 """
 Tone-Field Chat — Request / Response Models
 
-Pydantic schemas for all API endpoints.
+Pydantic schemas for all API endpoints including auth, stats, and admin.
 """
 
 from __future__ import annotations
@@ -27,6 +27,30 @@ class ChatMessage(BaseModel):
     timestamp: float
     tone_name: str
     tone_strength: int
+    tokens_in: int = 0
+    tokens_out: int = 0
+
+
+# ---------------------------------------------------------------------------
+# Auth
+# ---------------------------------------------------------------------------
+
+class JoinRequest(BaseModel):
+    username: str = Field(..., min_length=1, max_length=50)
+
+
+class AdminAuthRequest(BaseModel):
+    password: str = Field(..., min_length=1)
+
+
+class SessionResponse(BaseModel):
+    user_id: str
+    username: str
+    role: str
+    joined_at: float
+    last_active: float
+    total_messages: int
+    total_tokens_used: int
 
 
 # ---------------------------------------------------------------------------
@@ -79,6 +103,63 @@ class ModelResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Stats
+# ---------------------------------------------------------------------------
+
+class UserStatsResponse(BaseModel):
+    user_id: str
+    username: str
+    role: str
+    joined_at: float
+    last_active: float
+    total_messages: int
+    total_tokens_used: int
+
+
+class GlobalStatsResponse(BaseModel):
+    total_messages: int
+    total_tokens: int
+    active_users: int
+    total_users: int
+    connected_clients: int
+    users: list[UserStatsResponse]
+
+
+class MyStatsResponse(BaseModel):
+    user_id: str
+    username: str
+    role: str
+    total_messages: int
+    total_tokens_used: int
+    joined_at: float
+    last_active: float
+
+
+# ---------------------------------------------------------------------------
+# Admin — User management
+# ---------------------------------------------------------------------------
+
+class SetRoleRequest(BaseModel):
+    role: str = Field(..., pattern="^(user|admin)$")
+
+
+# ---------------------------------------------------------------------------
+# Admin — Context management
+# ---------------------------------------------------------------------------
+
+class ContextSettingsRequest(BaseModel):
+    max_messages: Optional[int] = Field(None, ge=1, le=100000)
+    max_tokens_per_user: Optional[int] = Field(None, ge=1, le=10000000)
+
+
+class ContextStatsResponse(BaseModel):
+    message_count: int
+    total_tokens: int
+    max_messages: int
+    max_tokens_per_user: int
+
+
+# ---------------------------------------------------------------------------
 # WebSocket broadcast payload
 # ---------------------------------------------------------------------------
 
@@ -86,7 +167,7 @@ class WSChatPayload(BaseModel):
     type: str = "chat"
     user: str
     message: str
-    original: Optional[str] = None  # Only included for admin
+    original: Optional[str] = None  # Sent to all clients; frontend controls visibility via showOriginals toggle
     timestamp: float
     tone_name: str
 

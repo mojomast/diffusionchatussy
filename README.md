@@ -48,6 +48,9 @@ pip install -r requirements.txt
 # Optional: set API key via env (can also set in admin UI)
 export LLM_API_KEY="your-key-here"
 
+# Optional: set admin password (defaults to "h4x0r")
+export ADMIN_PASSWORD="your-password"
+
 # Start the server
 python main.py
 ```
@@ -66,8 +69,8 @@ Frontend runs at `http://localhost:5173`, proxies API calls to the backend.
 
 ### 3. Configure
 
-1. Open `http://localhost:5173`, enter a name
-2. Click **Admin** in the top right
+1. Open `http://localhost:5173`, enter a name, click Join
+2. Click **Admin** in the top right, enter the admin password
 3. Set your provider and API key:
    - For **real diffusion**: select `inception` provider, model `mercury-2`, enter your Inception API key, and check "Real diffusion streaming"
    - For **standard mode**: select `openrouter` or any other provider
@@ -149,13 +152,49 @@ All tunable from the admin panel or API:
 
 Plus a strength slider: 0% (raw passthrough) to 100% (full tone rewrite). Custom tone descriptions supported.
 
+## User Sessions & Admin
+
+### Sessions
+Every user gets a persistent cookie (`tonechat_session`) when they join. This tracks their username, role, messages sent, and tokens used. Sessions survive browser refreshes (30-day cookie).
+
+### Admin Panel
+Click Admin in the header, enter the admin password (env `ADMIN_PASSWORD`, default `h4x0r`). The admin panel has:
+
+- **Tone Profile** — presets, custom tones, strength slider
+- **Model Configuration** — provider, model, API key, diffusion toggle, advanced params
+- **Context Management** — message/token usage bars, limit sliders, reset chat history
+- **User Management** — live user list with stats, role changes (user/admin), kick
+
+### Rate Limiting & Token Budgets
+- 10 messages per user per 60 seconds
+- Configurable max messages (default 500, auto-trims oldest)
+- Configurable per-user token budget (default 100k)
+
+### Live Stats
+The header and chat area show real-time stats: total messages, total tokens consumed, and users online. Stats update after every message via WebSocket.
+
 ## API Reference
+
+### Auth
+
+```
+POST /auth/join     { "username": "blong" }           -> session cookie + user info
+GET  /auth/session                                     -> current session info
+POST /auth/admin    { "password": "h4x0r" }           -> upgrades session to admin
+```
 
 ### Chat
 
 ```
 POST /message    { "user": "Kyle", "message": "this code is trash" }
 GET  /messages   ?limit=100
+```
+
+### Stats
+
+```
+GET  /stats      -> global stats (total messages, tokens, per-user breakdown)
+GET  /stats/me   -> current user's stats (requires session)
 ```
 
 ### Tone
@@ -174,13 +213,29 @@ POST /admin/model         { "provider": "inception", "model": "mercury-2", "diff
 GET  /admin/model/presets
 ```
 
+### Admin: User Management
+
+```
+POST /admin/users                      -> list all users
+POST /admin/users/{id}/role            { "role": "admin" }
+POST /admin/users/{id}/kick            -> remove user session
+```
+
+### Admin: Context Management
+
+```
+GET  /admin/context                    -> message count, tokens, limits
+POST /admin/context/reset              -> clear all messages
+POST /admin/context/settings           { "max_messages": 500, "max_tokens_per_user": 100000 }
+```
+
 ### WebSocket
 
 ```
 ws://localhost:8000/ws/chat
 ```
 
-Message types: `diffusion_start`, `diffusion_step`, `chat`, `tone_change`, `pong`
+Message types: `chat`, `diffusion_start`, `diffusion_step`, `tone_change`, `context_reset`, `user_joined`, `user_left`, `stats_update`, `error`, `pong`
 
 ## Project Structure
 

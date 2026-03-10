@@ -10,6 +10,7 @@ async function request<T>(
 ): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     headers: { "Content-Type": "application/json" },
+    credentials: "include",
     ...options,
   });
   if (!res.ok) {
@@ -26,10 +27,38 @@ import type {
   ToneConfig,
   ModelConfig,
   ChatMessage,
+  UserSession,
+  StatsResponse,
+  MyStatsResponse,
+  ContextStats,
 } from "./types";
 
 export async function getStatus(): Promise<StatusResponse> {
   return request<StatusResponse>("/");
+}
+
+// --- Auth ---
+
+export async function joinChat(
+  username: string
+): Promise<UserSession> {
+  return request<UserSession>("/auth/join", {
+    method: "POST",
+    body: JSON.stringify({ username }),
+  });
+}
+
+export async function getSession(): Promise<UserSession> {
+  return request<UserSession>("/auth/session");
+}
+
+export async function adminLogin(
+  password: string
+): Promise<UserSession> {
+  return request<UserSession>("/auth/admin", {
+    method: "POST",
+    body: JSON.stringify({ password }),
+  });
 }
 
 // --- Chat ---
@@ -46,8 +75,65 @@ export async function sendMessage(
 
 export async function getMessages(
   limit = 100
-): Promise<Array<{ user: string; original: string; rewritten: string; timestamp: number; tone_name: string }>> {
+): Promise<Array<{ user: string; original: string; rewritten: string; timestamp: number; tone_name: string; token_estimate?: number }>> {
   return request(`/messages?limit=${limit}`);
+}
+
+// --- Stats ---
+
+export async function getStats(): Promise<StatsResponse> {
+  return request<StatsResponse>("/stats");
+}
+
+export async function getMyStats(): Promise<MyStatsResponse> {
+  return request<MyStatsResponse>("/stats/me");
+}
+
+// --- Admin: User Management ---
+
+export async function getUsers(): Promise<{ users: UserSession[]; total: number }> {
+  return request<{ users: UserSession[]; total: number }>("/admin/users", {
+    method: "POST",
+  });
+}
+
+export async function setUserRole(
+  userId: string,
+  role: "user" | "admin"
+): Promise<{ status: string }> {
+  return request<{ status: string }>(`/admin/users/${userId}/role`, {
+    method: "POST",
+    body: JSON.stringify({ role }),
+  });
+}
+
+export async function kickUser(
+  userId: string
+): Promise<{ status: string }> {
+  return request<{ status: string }>(`/admin/users/${userId}/kick`, {
+    method: "POST",
+  });
+}
+
+// --- Admin: Context Management ---
+
+export async function resetContext(): Promise<{ status: string }> {
+  return request<{ status: string }>("/admin/context/reset", {
+    method: "POST",
+  });
+}
+
+export async function setContextSettings(
+  settings: { max_messages?: number; max_tokens_per_user?: number }
+): Promise<{ status: string }> {
+  return request<{ status: string }>("/admin/context/settings", {
+    method: "POST",
+    body: JSON.stringify(settings),
+  });
+}
+
+export async function getContextStats(): Promise<ContextStats> {
+  return request<ContextStats>("/admin/context");
 }
 
 // --- Tone ---
@@ -108,4 +194,39 @@ export async function getProviderPresets(): Promise<
     presets: Record<string, { base_url: string; default_model: string }>;
   }>("/admin/model/presets");
   return res.presets;
+}
+
+// --- OpenRouter Model Search ---
+
+export interface OpenRouterModel {
+  id: string;
+  name: string;
+  context_length: number;
+  prompt_price: string;
+  completion_price: string;
+}
+
+export async function searchOpenRouterModels(
+  query: string = "",
+  limit: number = 50
+): Promise<{ models: OpenRouterModel[]; total: number }> {
+  return request<{ models: OpenRouterModel[]; total: number }>(
+    `/admin/openrouter/models?q=${encodeURIComponent(query)}&limit=${limit}`
+  );
+}
+
+// --- OpenRouter Favorites ---
+
+export interface OpenRouterFavorite {
+  id: string;
+  name: string;
+  why: string;
+}
+
+export async function getOpenRouterFavorites(): Promise<{
+  favorites: OpenRouterFavorite[];
+}> {
+  return request<{ favorites: OpenRouterFavorite[] }>(
+    "/admin/openrouter/favorites"
+  );
 }
