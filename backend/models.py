@@ -55,7 +55,7 @@ class SetModelRequest(BaseModel):
     api_key: Optional[str] = Field(None, max_length=500)
     base_url: Optional[str] = Field(None, max_length=500)
     diffusion: Optional[bool] = None
-    max_tokens: Optional[int] = Field(None, ge=1, le=4096)
+    max_tokens: Optional[int] = Field(None, ge=1, le=50000)
     temperature: Optional[float] = Field(None, ge=0.0, le=2.0)
     top_p: Optional[float] = Field(None, ge=0.0, le=1.0)
     frequency_penalty: Optional[float] = Field(None, ge=-2.0, le=2.0)

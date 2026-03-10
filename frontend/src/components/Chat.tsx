@@ -112,6 +112,16 @@ export function Chat({
                     [diffused]
                   </span>
                 )}
+                {msg.rewrite_status === "no_key" && (
+                  <span className="text-xs text-amber-500">
+                    [no api key]
+                  </span>
+                )}
+                {msg.rewrite_status === "error" && (
+                  <span className="text-xs text-red-500">
+                    [rewrite failed]
+                  </span>
+                )}
               </div>
 
               <div

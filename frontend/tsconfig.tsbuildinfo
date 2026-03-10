@@ -1,0 +1,1 @@
+{"root":["./src/App.tsx","./src/api.ts","./src/main.tsx","./src/vite-env.d.ts","./src/components/AdminPanel.tsx","./src/components/Chat.tsx","./src/components/DiffusionText.tsx","./src/hooks/useWebSocket.ts","./src/types/index.ts"],"version":"5.6.3"}

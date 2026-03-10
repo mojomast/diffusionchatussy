@@ -151,6 +151,7 @@ async def _process_message(user: str, message: str) -> ChatMessage:
     timestamp = time.time()
     msg_id = str(uuid.uuid4())[:8]
     use_diffusion = state.model.diffusion and supports_diffusion(state.model)
+    rewrite_status = "ok"
 
     if use_diffusion:
         logger.info(f"Diffusion rewrite for {user}: {message[:80]}...")
@@ -191,6 +192,9 @@ async def _process_message(user: str, message: str) -> ChatMessage:
         logger.info(f"Standard rewrite for {user}: {message[:80]}...")
         result = await rewrite_message(message)
         rewritten = result["rewritten"]
+        rewrite_status = result.get("rewrite_status", "ok")
+        if rewrite_status != "ok":
+            logger.warning(f"Rewrite status: {rewrite_status} — {result.get('error', '')}")
         logger.info(f"Rewritten: {rewritten[:80]}...")
 
     # Build final message record
@@ -216,6 +220,7 @@ async def _process_message(user: str, message: str) -> ChatMessage:
         "timestamp": msg.timestamp,
         "tone_name": msg.tone_name,
         "diffused": use_diffusion,
+        "rewrite_status": rewrite_status if not use_diffusion else "ok",
     })
 
     return msg

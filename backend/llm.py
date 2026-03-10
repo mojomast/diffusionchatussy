@@ -45,13 +45,16 @@ def build_rewrite_prompt(message: str, tone: ToneConfig) -> str:
         f"Description: {tone.description}\n"
         f"{strength_note}\n\n"
         f"Rules:\n"
+        f"- ALWAYS produce a rewritten version, even for very short messages like 'hi' or 'ok'\n"
+        f"- For short messages, expand slightly to express the tone (e.g. 'hi' → 'Hey there, good to see you!')\n"
         f"- Preserve the original meaning exactly\n"
         f"- Do NOT add information the user did not express\n"
         f"- Do NOT remove the user's intent\n"
         f"- Only adjust the tone, word choice, and style\n"
         f"- Return ONLY the rewritten message text, nothing else\n"
         f"- Do NOT add quotes around the message\n"
-        f"- Keep the message roughly the same length"
+        f"- The rewritten message MUST be different from the original\n"
+        f"- Keep the message roughly the same length (short messages can be slightly longer)"
     )
 
     return system_prompt
@@ -250,20 +253,22 @@ async def call_llm_diffusion(
 
 async def rewrite_message(message: str) -> dict:
     """
-    Rewrite a chat message. Returns dict with 'rewritten'.
-    For non-diffusion providers or when diffusion is disabled.
+    Rewrite a chat message. Returns dict with 'rewritten' and 'rewrite_status'.
+    Status values: 'ok', 'passthrough', 'no_key', 'error'.
     """
 
     tone = state.tone
     model_config = state.model
 
-    result: dict = {"rewritten": message}
+    result: dict = {"rewritten": message, "rewrite_status": "passthrough"}
 
     if tone.strength == 0:
+        result["rewrite_status"] = "passthrough"
         return result
 
     if not model_config.api_key and model_config.provider not in ("local", "custom"):
         logger.warning("No API key configured — returning original message")
+        result["rewrite_status"] = "no_key"
         return result
 
     try:
@@ -272,13 +277,17 @@ async def rewrite_message(message: str) -> dict:
 
         if not rewritten:
             logger.warning("LLM returned empty response — using original")
+            result["rewrite_status"] = "error"
             return result
 
         result["rewritten"] = rewritten
+        result["rewrite_status"] = "ok"
         return result
 
     except Exception as e:
         logger.error(f"Rewrite failed: {e}")
+        result["rewrite_status"] = "error"
+        result["error"] = str(e)[:200]
         return result
 
 

@@ -10,6 +10,7 @@ export interface ChatMessage {
   tone_name: string;
   msg_id?: string;
   diffused?: boolean;     // true if this message went through real diffusion
+  rewrite_status?: "ok" | "passthrough" | "no_key" | "error";
 }
 
 export interface ToneConfig {
@@ -58,6 +59,7 @@ export interface WSChatMessage {
   timestamp: number;
   tone_name?: string;
   diffused?: boolean;
+  rewrite_status?: "ok" | "passthrough" | "no_key" | "error";
 }
 
 export interface WSDiffusionStart {

@@ -19,6 +19,10 @@ function App() {
   const [enteredChat, setEnteredChat] = useState(false);
   const [showOriginals, setShowOriginals] = useState(false);
   const [showAdmin, setShowAdmin] = useState(false);
+  const [adminAuthed, setAdminAuthed] = useState(false);
+  const [adminPassInput, setAdminPassInput] = useState("");
+  const [adminPassError, setAdminPassError] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
 
   // Track messages currently being diffused (real denoising in progress)
   const [diffusing, setDiffusing] = useState<Map<string, DiffusingMessage>>(
@@ -82,6 +86,7 @@ function App() {
             tone_name: msg.tone_name ?? "",
             msg_id: msg.msg_id,
             diffused: msg.diffused,
+            rewrite_status: msg.rewrite_status,
           };
           setMessages((prev) => [...prev, chatMsg]);
 
@@ -191,6 +196,25 @@ function App() {
     );
   }
 
+  const handleAdminLogin = () => {
+    if (adminPassInput === "h4x0r") {
+      setAdminAuthed(true);
+      setShowAdmin(true);
+      setAdminPassError(false);
+      setAdminPassInput("");
+    } else {
+      setAdminPassError(true);
+    }
+  };
+
+  const toggleAdmin = () => {
+    if (adminAuthed) {
+      setShowAdmin(!showAdmin);
+    } else {
+      setShowAdmin(!showAdmin); // Show the password prompt
+    }
+  };
+
   // Main chat layout
   return (
     <div className="h-screen flex flex-col">
@@ -202,12 +226,22 @@ function App() {
             className={`w-2 h-2 rounded-full ${connected ? "bg-green-500" : "bg-red-500"}`}
           />
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2">
           <span className="text-xs text-gray-500">{username}</span>
           <button
-            onClick={() => setShowAdmin(!showAdmin)}
+            onClick={() => setShowSettings(!showSettings)}
             className={`px-3 py-1 text-xs rounded-md border transition-colors ${
-              showAdmin
+              showSettings && !showAdmin
+                ? "bg-gray-700/50 border-gray-600 text-gray-300"
+                : "bg-gray-800 border-gray-700 text-gray-400 hover:border-gray-600"
+            }`}
+          >
+            Settings
+          </button>
+          <button
+            onClick={toggleAdmin}
+            className={`px-3 py-1 text-xs rounded-md border transition-colors ${
+              showAdmin && adminAuthed
                 ? "bg-indigo-600/20 border-indigo-500 text-indigo-300"
                 : "bg-gray-800 border-gray-700 text-gray-400 hover:border-gray-600"
             }`}
@@ -221,7 +255,7 @@ function App() {
       <div className="flex-1 flex overflow-hidden">
         {/* Chat panel */}
         <div
-          className={`flex-1 flex flex-col ${showAdmin ? "border-r border-gray-800" : ""}`}
+          className={`flex-1 flex flex-col ${(showAdmin || showSettings) ? "border-r border-gray-800" : ""}`}
         >
           <Chat
             messages={messages}
@@ -234,8 +268,50 @@ function App() {
           />
         </div>
 
-        {/* Admin sidebar */}
-        {showAdmin && (
+        {/* Admin sidebar — password gated */}
+        {showAdmin && !adminAuthed && (
+          <div className="w-80 flex-shrink-0 bg-gray-900/30 flex items-center justify-center">
+            <div className="px-6 w-full">
+              <h3 className="text-sm font-semibold text-gray-300 mb-4 text-center uppercase tracking-wide">
+                Admin Access
+              </h3>
+              <input
+                type="password"
+                value={adminPassInput}
+                onChange={(e) => {
+                  setAdminPassInput(e.target.value);
+                  setAdminPassError(false);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleAdminLogin();
+                }}
+                placeholder="Password"
+                autoFocus
+                className={`w-full bg-gray-800 text-white text-sm rounded-md px-3 py-2 border 
+                  ${adminPassError ? "border-red-500" : "border-gray-700"} 
+                  focus:outline-none focus:border-indigo-500 transition-colors`}
+              />
+              {adminPassError && (
+                <p className="text-xs text-red-400 mt-1">Wrong password</p>
+              )}
+              <button
+                onClick={handleAdminLogin}
+                className="w-full mt-3 px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-500 transition-colors"
+              >
+                Unlock
+              </button>
+              <button
+                onClick={() => setShowAdmin(false)}
+                className="w-full mt-2 px-4 py-2 text-gray-500 text-xs hover:text-gray-300 transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Admin sidebar — authenticated */}
+        {showAdmin && adminAuthed && (
           <div className="w-80 flex-shrink-0 bg-gray-900/30">
             <AdminPanel
               tone={tone}
@@ -245,6 +321,61 @@ function App() {
               showOriginals={showOriginals}
               onToggleOriginals={() => setShowOriginals(!showOriginals)}
             />
+          </div>
+        )}
+
+        {/* User settings sidebar — always available, no password */}
+        {showSettings && !showAdmin && (
+          <div className="w-72 flex-shrink-0 bg-gray-900/30">
+            <div className="px-4 py-3 border-b border-gray-800 bg-gray-900/50">
+              <h2 className="text-lg font-semibold text-white">Settings</h2>
+            </div>
+            <div className="px-4 py-4 space-y-4">
+              <section>
+                <h3 className="text-sm font-semibold text-gray-300 mb-3 uppercase tracking-wide">
+                  Display
+                </h3>
+                <div className="space-y-2">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={showOriginals}
+                      onChange={() => setShowOriginals(!showOriginals)}
+                      className="accent-indigo-500"
+                    />
+                    <span className="text-sm text-gray-400">
+                      Show original messages
+                    </span>
+                  </label>
+                </div>
+              </section>
+
+              {tone && (
+                <section>
+                  <h3 className="text-sm font-semibold text-gray-300 mb-2 uppercase tracking-wide">
+                    Room Info
+                  </h3>
+                  <div className="text-xs text-gray-500 space-y-1">
+                    <div>
+                      Tone: <span className="text-indigo-400">{tone.tone_name}</span> at {tone.strength}%
+                    </div>
+                    <div className="text-gray-600">{tone.description}</div>
+                  </div>
+                </section>
+              )}
+
+              {model && (
+                <section>
+                  <div className="text-xs text-gray-600 space-y-1">
+                    <div>Model: {model.model}</div>
+                    <div>Provider: {model.provider}</div>
+                    {model.diffusion && model.diffusion_available && (
+                      <div className="text-purple-400">Diffusion streaming active</div>
+                    )}
+                  </div>
+                </section>
+              )}
+            </div>
           </div>
         )}
       </div>

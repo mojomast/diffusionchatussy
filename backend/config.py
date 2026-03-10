@@ -102,9 +102,9 @@ class ModelConfig(BaseModel):
         ),
     )
     max_tokens: int = Field(
-        default=256,
+        default=1024,
         ge=1,
-        le=4096,
+        le=50000,
         description="Max tokens for the rewrite response",
     )
     temperature: float = Field(
