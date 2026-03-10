@@ -250,6 +250,60 @@ In the admin panel (password: value of ADMIN_PASSWORD, default `h4x0r`):
 - Check "Real diffusion streaming"
 - Apply
 
+## Production deployment (chat.ussyco.de)
+
+The app is deployed on `mail.basilisk.online` (the same server this repo lives on).
+
+### Components
+
+- **Nginx**: reverse proxy at `/etc/nginx/sites-enabled/chat.ussyco.de`
+  - Serves frontend static files from `/home/mojo/projects/tonechat/frontend/dist`
+  - Proxies `/api/*` to `127.0.0.1:8100` (strips `/api` prefix)
+  - Proxies `/ws/*` to `127.0.0.1:8100` (WebSocket upgrade)
+  - SSL via Let's Encrypt wildcard cert for `ussyco.de`
+  - SPA fallback (`try_files ... /index.html`)
+- **Systemd service**: `/etc/systemd/system/tonechat.service`
+  - Runs `uvicorn main:app --host 127.0.0.1 --port 8100`
+  - Uses venv at `/home/mojo/projects/tonechat/backend/venv`
+  - Auto-restarts on crash
+
+### Current state: STOPPED
+
+The service was stopped and disabled as of session 3. To bring it back up:
+
+```bash
+sudo systemctl enable --now tonechat
+```
+
+To stop it again:
+
+```bash
+sudo systemctl stop tonechat
+sudo systemctl disable tonechat
+```
+
+### Deploying new code
+
+After making changes:
+
+```bash
+# Rebuild frontend
+cd frontend && npm run build
+
+# Restart backend (picks up Python changes)
+sudo systemctl restart tonechat
+```
+
+No Docker involved. The backend runs directly from the venv, and nginx serves the built frontend files.
+
+### After restart
+
+The API key and all in-memory state (messages, users, sessions) are lost on restart. You need to reconfigure via the admin panel:
+1. Go to https://chat.ussyco.de/, join with a name
+2. Click Admin, enter password (`h4x0r` or whatever `ADMIN_PASSWORD` is set to)
+3. Set provider, API key, model
+4. Apply
+
 ## The big unresolved thing: diffusion
 
 ### The vision vs. what's built
