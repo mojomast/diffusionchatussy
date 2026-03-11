@@ -4,15 +4,15 @@
 
 A chat app where every message gets rewritten by an LLM to match a room-wide tone profile. The admin controls the tone (friendly, sarcastic, academic, poetic, etc.) and all messages drift toward it. Users type raw messages, the backend rewrites them via an LLM API call, and the rewritten version is broadcast to all connected clients over WebSocket.
 
-Built across three sessions. Session 1 built the core app. Session 2 fixed bugs from real user testing and added the OpenRouter model browser. Session 3 added user management, auth, token tracking, context management, and rate limiting.
+Built across four sessions. Session 1 built the core app. Session 2 fixed bugs from real user testing and added the OpenRouter model browser. Session 3 added user management, auth, token tracking, context management, and rate limiting. Session 4 brought the site back online, fixed .env loading, added granular max_tokens control, fixed language support in tone rewriting, and added DeepSeek V3 0324 as a recommended model.
 
 ## Status: What works right now
 
 - **Full chat system**: username entry -> cookie-based session -> chat room -> realtime WebSocket broadcasting
-- **Tone rewriting**: messages sent via POST -> rewritten by LLM -> broadcast to all clients
+- **Tone rewriting**: messages sent via POST -> rewritten by LLM -> broadcast to all clients. Supports language translation (e.g. tone description "speaks in french" rewrites all messages into French)
 - **Admin panel**: tone presets + custom, strength slider (0-100%), model/provider config with full parameter control
 - **8 provider presets**: Inception, OpenRouter, OpenAI, Anthropic, Together, Groq, local, custom
-- **OpenRouter model browser**: searchable list of 346+ models with 10 curated favorites for tone rewriting
+- **OpenRouter model browser**: searchable list of 346+ models with 11 curated favorites for tone rewriting (including DeepSeek V3 0324 for roleplay/creative)
 - **Mercury 2 diffusion streaming**: `diffusing: true` param -> SSE -> WebSocket `diffusion_step` events -> frontend renders each denoising state
 - **Refusal detection**: LLM safety filter responses are caught and the original message is shown instead
 - **Echo loop prevention**: copy-pasting a rewritten message back as input is detected and short-circuited
@@ -86,6 +86,47 @@ Key files: `backend/config.py:147-148` (rate limit config), `backend/config.py:3
 
 Key files: `backend/main.py:737-798` (user management endpoints), `frontend/src/components/AdminPanel.tsx` (user management section).
 
+## What was added in session 4
+
+### .env loading fix
+
+**Problem**: `config.py` used `os.getenv("LLM_API_KEY")` but never called `load_dotenv()`. The systemd service didn't source `.env` either, so the API key from `backend/.env` was ignored on production.
+
+**Fix**: Added `from dotenv import load_dotenv` and `load_dotenv()` at the top of `config.py`. The backend now reads `backend/.env` automatically on startup. `python-dotenv` was already in requirements.txt.
+
+Key file: `backend/config.py:15-18`.
+
+### Granular max_tokens control
+
+**Problem**: Max tokens was buried in the "advanced settings" accordion as a plain number input capped at 4096. Hard to fine-tune.
+
+**Fix**: Moved max_tokens out of advanced settings into the main Model Configuration section. New UI has:
+- A slider (1 to 16,384 with step-of-1 precision)
+- A number input for exact values up to 50,000
+- Quick-pick buttons for common values: 32, 128, 256, 512, 1k, 2k, 4k
+- Backend cap raised from 4,096 to 50,000 (matches the Pydantic model's `le=50000`)
+
+Key files: `frontend/src/components/AdminPanel.tsx` (max tokens UI), `backend/config.py:313` (raised cap).
+
+### Language support in tone rewriting
+
+**Problem**: Setting the tone description to something like "speaks in french" didn't work. The system prompt told the LLM to "preserve word choice" which conflicted with translating.
+
+**Fix**: Added explicit rules to the system prompt:
+- "The tone description is your PRIMARY directive. Follow it exactly and completely."
+- "If the tone description specifies a language, you MUST rewrite the entire message in that language. Translate fully."
+- Changed "Only adjust the tone, word choice, and style" to include "and language as specified by the tone description"
+
+Key file: `backend/llm.py:106-109`.
+
+### DeepSeek V3 0324 added to favorites
+
+**Problem**: Mercury 2 is fast but bad at nuanced instruction following (language, complex tones). Needed a better model for creative/roleplay use.
+
+**Fix**: Added `deepseek/deepseek-chat-v3-0324` to `OPENROUTER_FAVORITES` in config.py. Shows up in the "Recommended for ToneChat" section of the model browser. $0.20/$0.77 per 1M tokens, 163k context, excellent at creative writing and roleplay.
+
+Key file: `backend/config.py:134-138`.
+
 ### System messages & display improvements
 
 **Problem**: No visibility when users join/leave or when admin actions happen.
@@ -119,8 +160,8 @@ LLM Provider (Inception / OpenRouter / OpenAI / etc)
 
 | File | Lines | What it does |
 |---|---|---|
-| `config.py` | 418 | AppState singleton, ToneConfig, ModelConfig, PROVIDER_PRESETS, TONE_PRESETS, OPENROUTER_FAVORITES, ADMIN_PASSWORD, user session management, rate limiting, token tracking, context settings. All in-memory. |
-| `llm.py` | 427 | `estimate_tokens()`, `build_rewrite_prompt()`, `_is_refusal()`, `call_llm()` (standard), `call_llm_diffusion()` (async generator yielding SSE states), `rewrite_message()` (now returns tokens_in/tokens_out), `rewrite_message_diffusion()`, `supports_diffusion()` |
+| `config.py` | 427 | AppState singleton, ToneConfig, ModelConfig, PROVIDER_PRESETS, TONE_PRESETS, OPENROUTER_FAVORITES (11 models), ADMIN_PASSWORD, user session management, rate limiting, token tracking, context settings. Loads .env via python-dotenv. All in-memory. |
+| `llm.py` | 431 | `estimate_tokens()`, `build_rewrite_prompt()` (with language support), `_is_refusal()`, `call_llm()` (standard), `call_llm_diffusion()` (async generator yielding SSE states), `rewrite_message()` (now returns tokens_in/tokens_out), `rewrite_message_diffusion()`, `supports_diffusion()` |
 | `main.py` | 930 | FastAPI app. Session helpers, admin auth, rate limiting, token tracking. Routes for /auth/*, /message, /stats/*, /admin/tone, /admin/model, /admin/openrouter/*, /admin/users/*, /admin/context/*, /ws/chat. `_process_message()` is the core with rate limit + token limit checks. |
 | `models.py` | 192 | Pydantic v2 request/response schemas including auth, stats, user management, and context management models. |
 
@@ -131,7 +172,7 @@ LLM Provider (Inception / OpenRouter / OpenAI / etc)
 | `types/index.ts` | 188 | All types: ChatMessage (with token_estimate), UserSession, StatsResponse, MyStatsResponse, ContextStats, SystemMessage, DisplayMessage union, WSMessage discriminated union (chat, diffusion_start, diffusion_step, tone_change, pong, context_reset, user_joined, user_left, stats_update), DiffusingMessage. |
 | `App.tsx` | 543 | Main state. Session management via /auth/join and /auth/admin. Handles all WS events including new ones. Live stats, personal stats, system messages. Admin password verified server-side. |
 | `components/Chat.tsx` | 314 | Renders display messages (chat + system) + diffusing messages. Stats bar, auto-scroll, auto-focus, pipeline status, per-message token estimates. |
-| `components/AdminPanel.tsx` | ~850 | Tone presets/custom, strength slider, provider dropdown, model config, OpenRouter model browser, diffusion toggle, advanced params. NEW: Context management (stats, limits, reset), User management (list, roles, kick). |
+| `components/AdminPanel.tsx` | ~940 | Tone presets/custom, strength slider, provider dropdown, model config, OpenRouter model browser, diffusion toggle, granular max_tokens slider with quick-pick buttons, advanced params. Context management (stats, limits, reset), User management (list, roles, kick). |
 | `components/DiffusionText.tsx` | 28 | Renders `content` string + animated cursor when active. |
 | `hooks/useWebSocket.ts` | 61 | Auto-reconnecting WS with `onMessage` callback ref pattern. |
 | `api.ts` | 232 | Typed HTTP client with `credentials: "include"` for all calls. All REST endpoints including auth, stats, user management, context management, OpenRouter model search. |
@@ -267,9 +308,18 @@ The app is deployed on `mail.basilisk.online` (the same server this repo lives o
   - Uses venv at `/home/mojo/projects/tonechat/backend/venv`
   - Auto-restarts on crash
 
-### Current state: STOPPED
+### Current state: RUNNING
 
-The service was stopped and disabled as of session 3. To bring it back up:
+The service is enabled and running as of session 4. The backend loads its API key from `backend/.env` via `python-dotenv`, so it survives restarts without needing to reconfigure via the admin panel.
+
+To stop it:
+
+```bash
+sudo systemctl stop tonechat
+sudo systemctl disable tonechat
+```
+
+To bring it back up:
 
 ```bash
 sudo systemctl enable --now tonechat
@@ -298,11 +348,10 @@ No Docker involved. The backend runs directly from the venv, and nginx serves th
 
 ### After restart
 
-The API key and all in-memory state (messages, users, sessions) are lost on restart. You need to reconfigure via the admin panel:
+In-memory state (messages, users, sessions) is lost on restart. However, the API key now persists via `backend/.env`, so the LLM is ready immediately. You may still want to:
 1. Go to https://chat.ussyco.de/, join with a name
 2. Click Admin, enter password (`h4x0r` or whatever `ADMIN_PASSWORD` is set to)
-3. Set provider, API key, model
-4. Apply
+3. Adjust model, tone, or other settings as needed
 
 ## The big unresolved thing: diffusion
 

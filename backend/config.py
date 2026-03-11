@@ -12,7 +12,11 @@ import os
 import time
 from typing import Optional
 
+from dotenv import load_dotenv
 from pydantic import BaseModel, Field
+
+# Load .env file from the working directory (backend/)
+load_dotenv()
 
 
 # ---------------------------------------------------------------------------
@@ -126,6 +130,11 @@ OPENROUTER_FAVORITES: list[dict[str, str]] = [
         "id": "qwen/qwen3-30b-a3b",
         "name": "Qwen: Qwen3 30B A3B",
         "why": "MoE with only 3B active params = very fast. Strong multilingual style transfer. $0.08/$0.28 per 1M.",
+    },
+    {
+        "id": "deepseek/deepseek-chat-v3-0324",
+        "name": "DeepSeek: V3 0324",
+        "why": "The roleplay king. Excellent creative writing, uncensored, great instruction following. $0.20/$0.77 per 1M.",
     },
     {
         "id": "deepseek/deepseek-chat",
@@ -301,7 +310,7 @@ class AppState:
         if diffusion is not None:
             self.model.diffusion = diffusion
         if max_tokens is not None:
-            self.model.max_tokens = max(1, min(4096, max_tokens))
+            self.model.max_tokens = max(1, min(50000, max_tokens))
         if temperature is not None:
             self.model.temperature = max(0.0, min(2.0, temperature))
         if top_p is not None:

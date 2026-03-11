@@ -561,6 +561,50 @@ export function AdminPanel({
               />
             </div>
 
+            {/* ---- MAX TOKENS ---- */}
+            <div>
+              <label className={labelClass}>
+                Max Tokens: <span className="font-mono text-indigo-400">{maxTokens}</span>
+              </label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="range"
+                  min={1}
+                  max={16384}
+                  step={1}
+                  value={maxTokens}
+                  onChange={(e) => setMaxTokens(Number(e.target.value))}
+                  className="flex-1 accent-indigo-500"
+                />
+                <input
+                  type="number"
+                  min={1}
+                  max={50000}
+                  value={maxTokens}
+                  onChange={(e) => {
+                    const v = Number(e.target.value);
+                    if (v >= 1 && v <= 50000) setMaxTokens(v);
+                  }}
+                  className="w-20 bg-gray-800 text-white text-xs font-mono rounded px-2 py-1.5 border border-gray-700 focus:outline-none focus:border-indigo-500 transition-colors"
+                />
+              </div>
+              <div className="flex justify-between mt-1">
+                {[32, 128, 256, 512, 1024, 2048, 4096].map((v) => (
+                  <button
+                    key={v}
+                    onClick={() => setMaxTokens(v)}
+                    className={`text-[10px] px-1.5 py-0.5 rounded transition-colors ${
+                      maxTokens === v
+                        ? "bg-indigo-600/30 text-indigo-300 border border-indigo-500/50"
+                        : "text-gray-600 hover:text-gray-400"
+                    }`}
+                  >
+                    {v >= 1024 ? `${v / 1024}k` : v}
+                  </button>
+                ))}
+              </div>
+            </div>
+
             {/* ---- DIFFUSION TOGGLE ---- */}
             <div className="border border-purple-500/20 rounded-lg p-3 bg-purple-900/10">
               <label className="flex items-center gap-2 cursor-pointer">
@@ -598,30 +642,16 @@ export function AdminPanel({
 
             {expanded && (
               <div className="space-y-3 border border-gray-800 rounded-lg p-3 bg-gray-900/30">
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className={labelClass}>Max Tokens</label>
-                    <input
-                      type="number"
-                      min={1}
-                      max={4096}
-                      value={maxTokens}
-                      onChange={(e) => setMaxTokens(Number(e.target.value))}
-                      className={inputClass}
-                    />
-                  </div>
-
-                  <div>
-                    <label className={labelClass}>Timeout (s)</label>
-                    <input
-                      type="number"
-                      min={1}
-                      max={120}
-                      value={timeout}
-                      onChange={(e) => setTimeout_(Number(e.target.value))}
-                      className={inputClass}
-                    />
-                  </div>
+                <div>
+                  <label className={labelClass}>Timeout (s)</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={120}
+                    value={timeout}
+                    onChange={(e) => setTimeout_(Number(e.target.value))}
+                    className={inputClass}
+                  />
                 </div>
 
                 <div>
