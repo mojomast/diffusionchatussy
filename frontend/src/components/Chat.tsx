@@ -88,10 +88,10 @@ export function Chat({
       {/* Header bar */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-gray-800 bg-gray-900/50">
         <div className="flex items-center gap-3">
-          <h2 className="text-lg font-semibold text-white">Chat</h2>
+          <h2 className="text-lg font-semibold text-white">Tchaikovskussy Chat</h2>
           {tone && (
-            <span className="px-2 py-0.5 text-xs rounded-full bg-indigo-600/30 text-indigo-300 border border-indigo-500/30">
-              {tone.tone_name} &middot; {tone.strength}%
+            <span className="px-2 py-0.5 text-xs rounded-full bg-indigo-600/20 text-indigo-200 border border-indigo-500/20">
+              communication layer active
             </span>
           )}
         </div>
@@ -121,7 +121,7 @@ export function Chat({
       <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
         {displayMessages.length === 0 && diffusingArray.length === 0 && (
           <div className="flex items-center justify-center h-full text-gray-600 text-sm">
-            No messages yet. Say something — the room will reshape your words.
+            No messages yet. Say something — BabelFish will bridge the room.
           </div>
         )}
 
@@ -168,12 +168,12 @@ export function Chat({
                 )}
                 {msg.translation_language && (
                   <span className="text-xs text-emerald-400">
-                    [{msg.translation_language}]
+                    [heard as {msg.translation_language}]
                   </span>
                 )}
                 {msg.source_language && msg.translation_language && msg.source_language !== msg.translation_language && (
                   <span className="text-xs text-cyan-400">
-                    [from {msg.source_language}]
+                    [spoken in {msg.source_language}]
                   </span>
                 )}
                 {msg.tone_applied === false && (
@@ -284,9 +284,9 @@ export function Chat({
             </div>
             <span className="text-xs text-gray-500">
               {pipeline === "rewriting"
-                ? "rewriting tone..."
+                ? "bridging languages..."
                 : pipeline === "diffusing"
-                  ? "diffusing — denoising in progress"
+                  ? "processing message stream"
                   : ""}
             </span>
           </div>
@@ -302,11 +302,11 @@ export function Chat({
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder={
-              isBusy
-                ? "Message drifting through noise..."
-                : "Type a message..."
-            }
+              placeholder={
+                isBusy
+                  ? "Passing through BabelFish..."
+                  : "Type in your language..."
+              }
             disabled={isBusy}
             className="flex-1 bg-gray-800 text-white rounded-lg px-4 py-2.5 text-sm 
                        placeholder-gray-500 border border-gray-700 

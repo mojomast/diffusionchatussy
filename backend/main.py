@@ -253,7 +253,7 @@ def _user_transform_signature(user: Optional[dict]) -> tuple[bool, str, bool, st
     state.sanitize_user_preferences(user)
     prefs = user["preferences"]
     translation_enabled = bool(prefs.get("translation_enabled", False))
-    target_language = prefs.get("target_language", "") if translation_enabled else ""
+    target_language = prefs.get("perceiving_language", prefs.get("target_language", "")) if translation_enabled else ""
     tone_enabled = bool(prefs.get("tone_enabled", True))
     tone_prompt = ""
     preset_id = str(prefs.get("tone_prompt_preset_id", "")).strip()
@@ -285,7 +285,21 @@ def _update_user_preferences(user: dict, req: UpdatePersonalizationRequest) -> N
         target_language = req.target_language.strip()
         if target_language not in state.personalization.available_languages:
             raise HTTPException(status_code=400, detail="Selected language is not available.")
+        prefs["perceiving_language"] = target_language
         prefs["target_language"] = target_language
+
+    if req.speaking_language is not None:
+        speaking_language = req.speaking_language.strip()
+        if speaking_language not in state.personalization.available_languages:
+            raise HTTPException(status_code=400, detail="Selected speaking language is not available.")
+        prefs["speaking_language"] = speaking_language
+
+    if req.perceiving_language is not None:
+        perceiving_language = req.perceiving_language.strip()
+        if perceiving_language not in state.personalization.available_languages:
+            raise HTTPException(status_code=400, detail="Selected listening language is not available.")
+        prefs["perceiving_language"] = perceiving_language
+        prefs["target_language"] = perceiving_language
 
     if req.tone_enabled is not None:
         prefs["tone_enabled"] = req.tone_enabled
@@ -323,7 +337,7 @@ def _guess_language_name(text: str) -> str:
         return "Arabic"
     if any("\u4e00" <= char <= "\u9fff" for char in text):
         return "Chinese"
-    return "Original"
+    return "Unknown"
 
 
 async def _build_personalized_chat_payload(
@@ -370,6 +384,17 @@ async def _build_personalized_chat_payload(
         "translation_language": target_language if translation_enabled else None,
         "source_language": msg.source_language,
     }
+
+
+async def _build_sender_message_record(user: str, message: str, session_id: Optional[str]) -> tuple[str, str]:
+    """Determine the sender's chosen speaking language and text to store as original."""
+    sender = state.get_user(session_id) if session_id else None
+    if not sender:
+        return message, _guess_language_name(message)
+
+    prefs = sender.get("preferences", {})
+    speaking_language = str(prefs.get("speaking_language", "")).strip() or _guess_language_name(message)
+    return message, speaking_language
 
 
 async def broadcast_room_tone_only(payload: dict) -> None:
@@ -593,9 +618,11 @@ async def _process_message(user: str, message: str, session_id: Optional[str] = 
         state.global_stats["total_tokens"] += total_tokens
 
     # Build final message record
+    original_message, source_language = await _build_sender_message_record(user, message, session_id)
+
     msg = ChatMessage(
         user=user,
-        original=message,
+        original=original_message,
         rewritten=rewritten,
         timestamp=timestamp,
         tone_name=state.tone.tone_name,
@@ -604,7 +631,7 @@ async def _process_message(user: str, message: str, session_id: Optional[str] = 
         tokens_out=tokens_out,
         tone_applied=state.tone.strength > 0,
         translation_language=None,
-        source_language=_guess_language_name(message),
+        source_language=source_language,
     )
 
     # Store

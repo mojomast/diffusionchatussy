@@ -63,7 +63,8 @@ class SessionResponse(BaseModel):
 
 class UserPreferences(BaseModel):
     translation_enabled: bool
-    target_language: str
+    speaking_language: str
+    perceiving_language: str
     tone_enabled: bool
     tone_prompt_preset_id: str
     tone_prompt: str
@@ -88,6 +89,8 @@ class PersonalizationResponse(BaseModel):
 
 class UpdatePersonalizationRequest(BaseModel):
     translation_enabled: Optional[bool] = None
+    speaking_language: Optional[str] = Field(None, max_length=100)
+    perceiving_language: Optional[str] = Field(None, max_length=100)
     target_language: Optional[str] = Field(None, max_length=100)
     tone_enabled: Optional[bool] = None
     tone_prompt_preset_id: Optional[str] = Field(None, max_length=100)

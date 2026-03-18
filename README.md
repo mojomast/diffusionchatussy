@@ -1,28 +1,34 @@
-# DiffusionChat
+# Tchaikovskussy
 
-A chat system where every message is rewritten by an LLM to match the room's tone — and when you use Mercury 2 (the first diffusion LLM), you watch the real denoising process happen live. Text resolves from noise into the room's vibe through the model's actual diffusion steps, streamed to your screen in realtime.
+Tchaikovskussy is a communication-first multilingual chat app. Each person chooses the language they want to write in and the language they want to read in, and the system acts like a BabelFish middle layer so people across languages can talk naturally.
 
-Not a simulation. Not an animation. The actual model internals, piped to your chat window.
+This branch is the transition branch from the older tone-heavy product into a cleaner communication tool. Some legacy style-layer controls still exist in the admin/backend, but the product direction here is language mediation first.
 
-## How It Works
+## Core Idea
 
-```
-User types message
-       |
-       v
-Backend sends to Mercury 2 with tone instructions
-       |
-       v
-Mercury 2 diffuses: parallel token refinement, coarse → fine
-       |
-       v
-Each denoising step is streamed over WebSocket to all clients
-       |
-       v
-Chat shows text resolving from noise → coherent tone-shifted message
+```text
+User types in their speaking language
+        |
+        v
+Backend stores the sender's chosen language context
+        |
+        v
+Each recipient gets the message translated into their preferred hearing language
+        |
+        v
+People using different languages can converse in one room
 ```
 
-With diffusion OFF (or using a non-diffusion model like GPT-4o-mini), messages are rewritten normally — you just see the final result. With diffusion ON using Mercury 2 via the Inception API, you see the intermediate states as the model refines the output.
+## Product Direction
+
+- communication-first multilingual chat
+- separate user preferences for `speaking_language` and `perceiving_language`
+- admin-managed allowed languages
+- unilateral translation for each recipient
+- legacy tone/style features kept only temporarily while this is forked into a new repo
+
+Planned repo destination for the new product:
+- `mojomast/Tchaikovskussy`
 
 ## Quick Start
 
@@ -30,28 +36,17 @@ With diffusion OFF (or using a non-diffusion model like GPT-4o-mini), messages a
 
 - Python 3.10+
 - Node.js 18+
-- An API key (Inception for diffusion, or OpenRouter/OpenAI/etc for standard mode)
+- An API key for model-backed translation
 
 ### 1. Backend
 
 ```bash
 cd backend
-
-# Create virtual environment
 python -m venv venv
-source venv/bin/activate  # Linux/Mac
-# venv\Scripts\activate   # Windows
-
-# Install dependencies
+source venv/bin/activate
 pip install -r requirements.txt
-
-# Optional: set API key via env (can also set in admin UI)
 export LLM_API_KEY="your-key-here"
-
-# Optional: set admin password (defaults to "h4x0r")
 export ADMIN_PASSWORD="your-password"
-
-# Start the server
 python main.py
 ```
 
@@ -65,216 +60,106 @@ npm install
 npm run dev
 ```
 
-Frontend runs at `http://localhost:5173`, proxies API calls to the backend.
+Frontend runs at `http://localhost:5173` and proxies API calls to the backend.
 
-### 3. Configure
+### 3. Use It
 
-1. Open `http://localhost:5173`, enter a name, click Join
-2. Click **Admin** in the top right, enter the admin password
-3. Set your provider and API key:
-   - For **real diffusion**: select `inception` provider, model `mercury-2`, enter your Inception API key, and check "Real diffusion streaming"
-   - For **standard mode**: select `openrouter` or any other provider
-4. Pick a tone, set strength, hit Apply
-5. Chat. Watch your words transform.
+1. Open `http://localhost:5173`
+2. Join with a username
+3. Open **Settings**
+4. Choose:
+   - `I speak`
+   - `I hear`
+5. Enable BabelFish translation
+6. Start chatting in your own language
 
-## Real Diffusion Streaming
+### 4. Admin Setup
 
-This is the core feature. Mercury 2 by Inception is a discrete diffusion LLM — instead of generating tokens one at a time left-to-right (autoregressive), it refines the entire output in parallel through denoising steps: noise → rough draft → refined → final.
+1. Open **Admin**
+2. Enter the admin password
+3. Configure:
+   - model/provider
+   - allowed languages
+   - any temporary legacy style-layer settings still needed during migration
 
-Mercury 2's API exposes these intermediate states via `"stream": true, "diffusing": true`. DiffusionChat pipes them directly to the frontend over WebSocket:
+## BabelFish Preferences
 
-1. Backend receives your message
-2. Calls Mercury 2 with `diffusing: true`
-3. Each SSE chunk contains the **full current denoised state** (not incremental tokens)
-4. Backend broadcasts each state as a `diffusion_step` WebSocket event
-5. Frontend renders each step in place — you watch text resolve from noise
-6. Final `chat` event replaces the diffusing message with the resolved result
+Each user has these key settings:
 
-The WebSocket message flow:
+- `speaking_language` — the language they intend to write in
+- `perceiving_language` — the language they want to read in
+- `translation_enabled` — whether incoming chat should be mediated into their hearing language
 
-```json
-{"type": "diffusion_start", "msg_id": "a1b2c3", "user": "Kyle", "original": "this sucks"}
-{"type": "diffusion_step",  "msg_id": "a1b2c3", "content": "th$s ne#ds imp@ov!ment", "step": 1}
-{"type": "diffusion_step",  "msg_id": "a1b2c3", "content": "this needs improvement.", "step": 2}
-{"type": "diffusion_step",  "msg_id": "a1b2c3", "content": "This could use some improvement.", "step": 3}
-{"type": "chat",            "msg_id": "a1b2c3", "message": "This could use some improvement.", "diffused": true}
-```
+This creates a unilateral translation model:
+- one sender writes once
+- each recipient receives a version translated for them
 
-## Supported Providers
+## Current Branch Notes
 
-| Provider | Base URL | Default Model | Diffusion |
-|---|---|---|---|
-| **inception** | `https://api.inceptionlabs.ai/v1` | `mercury-2` | Yes — real denoising steps |
-| **openrouter** | `https://openrouter.ai/api/v1` | `inception/mercury-2` | No — standard completion |
-| openai | `https://api.openai.com/v1` | `gpt-4o-mini` | No |
-| anthropic | `https://api.anthropic.com/v1` | `claude-3-5-sonnet-20241022` | No |
-| together | `https://api.together.xyz/v1` | `meta-llama/Llama-3-70b-chat-hf` | No |
-| groq | `https://api.groq.com/openai/v1` | `llama-3.1-70b-versatile` | No |
-| local | `http://localhost:1234/v1` | Any local model | No |
-| custom | (you set it) | (you set it) | No |
+This branch still contains some legacy implementation pieces from the older product:
 
-All providers use the OpenAI-compatible chat completions format. Real diffusion streaming is only available via the Inception API directly (the `"diffusing"` param is Inception-specific).
+- room tone config
+- optional style/tone transformation pipeline
+- diffusion-related model settings
 
-## Mercury 2
+Those are not the long-term point of Tchaikovskussy. The fork should progressively strip those out and keep only the multilingual communication stack.
 
-[Mercury 2](https://www.inceptionlabs.ai/blog/introducing-mercury-2) is the first commercial reasoning diffusion LLM:
-
-- **1,000+ tokens/sec** on NVIDIA GPUs — 5-10x faster than GPT-4o-mini or Claude 3.5 Haiku
-- **$0.25/M input, $0.75/M output tokens** — ~$0.00004 per chat rewrite
-- **128K context**, native tool use, structured JSON output
-- **OpenAI-compatible API** — drop-in replacement
-- **10M free tokens** on signup at [platform.inceptionlabs.ai](https://platform.inceptionlabs.ai)
-
-## Model Configuration
-
-All tunable from the admin panel or API:
-
-| Parameter | Range | Default | Description |
-|---|---|---|---|
-| `diffusion` | true/false | false | Stream real denoising steps (Inception only) |
-| `max_tokens` | 1–4096 | 256 | Max tokens in the rewrite |
-| `temperature` | 0.0–2.0 | 0.7 | Sampling randomness |
-| `top_p` | 0.0–1.0 | 1.0 | Nucleus sampling |
-| `frequency_penalty` | -2.0–2.0 | 0.0 | Repeated token penalty |
-| `presence_penalty` | -2.0–2.0 | 0.0 | Already-present token penalty |
-| `timeout` | 1–120s | 30 | Request timeout |
-
-## Tone Presets
-
-- **friendly** — Casual, polite, collaborative
-- **professional** — Formal, clear, respectful
-- **sarcastic** — Witty, not mean-spirited
-- **academic** — Calm, analytical, scholarly
-- **chaotic** — Unpredictable, playful, energetic
-- **supportive** — Encouraging, empathetic, kind
-- **concise** — Extremely brief, no fluff
-- **poetic** — Lyrical, metaphorical, expressive
-
-Plus a strength slider: 0% (raw passthrough) to 100% (full tone rewrite). Custom tone descriptions supported.
-
-## User Sessions & Admin
-
-### Sessions
-Every user gets a persistent cookie (`tonechat_session`) when they join. This tracks their username, role, messages sent, and tokens used. Sessions survive browser refreshes (30-day cookie).
-
-### Admin Panel
-Click Admin in the header, enter the admin password (env `ADMIN_PASSWORD`, default `h4x0r`). The admin panel has:
-
-- **Tone Profile** — presets, custom tones, strength slider
-- **Model Configuration** — provider, model, API key, diffusion toggle, advanced params
-- **Context Management** — message/token usage bars, limit sliders, reset chat history
-- **User Management** — live user list with stats, role changes (user/admin), kick
-
-### Rate Limiting & Token Budgets
-- 10 messages per user per 60 seconds
-- Configurable max messages (default 500, auto-trims oldest)
-- Configurable per-user token budget (default 100k)
-
-### Live Stats
-The header and chat area show real-time stats: total messages, total tokens consumed, and users online. Stats update after every message via WebSocket.
-
-## API Reference
+## API Highlights
 
 ### Auth
 
-```
-POST /auth/join     { "username": "blong" }           -> session cookie + user info
-GET  /auth/session                                     -> current session info
-POST /auth/admin    { "password": "h4x0r" }           -> upgrades session to admin
-```
-
-### Chat
-
-```
-POST /message    { "user": "Kyle", "message": "this code is trash" }
-GET  /messages   ?limit=100
+```text
+POST /auth/join
+GET  /auth/session
+POST /auth/admin
 ```
 
-### Stats
+### User Preferences
 
-```
-GET  /stats      -> global stats (total messages, tokens, per-user breakdown)
-GET  /stats/me   -> current user's stats (requires session)
-```
-
-### Tone
-
-```
-GET  /admin/tone
-POST /admin/tone          { "tone_name": "academic", "description": "...", "strength": 80 }
-GET  /admin/tone/presets
+```text
+GET  /preferences
+POST /preferences
 ```
 
-### Model
+Example update payload:
 
-```
-GET  /admin/model
-POST /admin/model         { "provider": "inception", "model": "mercury-2", "diffusion": true, ... }
-GET  /admin/model/presets
-```
-
-### Admin: User Management
-
-```
-POST /admin/users                      -> list all users
-POST /admin/users/{id}/role            { "role": "admin" }
-POST /admin/users/{id}/kick            -> remove user session
+```json
+{
+  "translation_enabled": true,
+  "speaking_language": "English",
+  "perceiving_language": "Spanish"
+}
 ```
 
-### Admin: Context Management
+### Admin Personalization
 
-```
-GET  /admin/context                    -> message count, tokens, limits
-POST /admin/context/reset              -> clear all messages
-POST /admin/context/settings           { "max_messages": 500, "max_tokens_per_user": 100000 }
-```
-
-### WebSocket
-
-```
-ws://localhost:8000/ws/chat
+```text
+GET  /admin/personalization
+POST /admin/personalization
 ```
 
-Message types: `chat`, `diffusion_start`, `diffusion_step`, `tone_change`, `context_reset`, `user_joined`, `user_left`, `stats_update`, `error`, `pong`
+Example admin payload:
 
-## Project Structure
-
-```
-diffusionchat/
-  backend/
-    main.py            # FastAPI app, routes, WebSocket, diffusion streaming
-    config.py          # App state, tone/model config, provider presets
-    llm.py             # LLM client: standard + diffusion streaming (Mercury 2)
-    models.py          # Pydantic request/response schemas
-    requirements.txt
-  frontend/
-    src/
-      components/
-        Chat.tsx          # Chat window, diffusing message display, pipeline status
-        AdminPanel.tsx    # Tone, model, diffusion toggle, advanced settings
-        DiffusionText.tsx # Renders real denoising step content
-      hooks/
-        useWebSocket.ts   # WebSocket with auto-reconnect
-      types/
-        index.ts          # TypeScript types (WSMessage union, DiffusingMessage, etc)
-      api.ts              # HTTP API client
-      App.tsx             # State management, WS message routing
-      main.tsx
-      index.css
-    index.html
-    package.json
-    vite.config.ts
-    tailwind.config.js
-    tsconfig.json
-  .env.example
-  .gitignore
-  README.md
+```json
+{
+  "available_languages": ["English", "Spanish", "German", "Japanese"],
+  "allow_user_tone_prompt_edit": false,
+  "tone_prompt_presets": [
+    { "id": "none", "label": "None", "prompt": "" }
+  ]
+}
 ```
 
-## Cost
+## Development Status
 
-Mercury 2: $0.25/M input, $0.75/M output. At ~50 tokens per rewrite, that's ~25,000 rewrites per dollar. Free tier: 10M tokens on signup.
+Implemented on this branch:
+- BabelFish-style speak/hear language settings
+- admin-controlled language availability
+- personalized recipient-side translation flow
+- updated UI copy toward communication-first chat
 
-## License
-
-MIT
+Still to do for the full fork:
+- remove remaining tone/style code paths entirely
+- rename repo/package/service identifiers away from ToneChat
+- simplify admin UI around language mediation only
+- migrate this branch into `mojomast/Tchaikovskussy`

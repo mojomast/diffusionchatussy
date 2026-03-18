@@ -63,6 +63,8 @@ export interface UserSession {
 
 export interface UserPreferences {
   translation_enabled: boolean;
+  speaking_language: string;
+  perceiving_language: string;
   target_language: string;
   tone_enabled: boolean;
   tone_prompt_preset_id: string;

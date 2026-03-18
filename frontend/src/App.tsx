@@ -213,7 +213,8 @@ function App() {
 
   const websocketKey = [
     session?.user_id ?? "guest",
-    preferences?.translation_enabled ? preferences.target_language : "no-translation",
+    preferences?.translation_enabled ? preferences.perceiving_language : "no-translation",
+    preferences?.speaking_language ?? "speak-default",
     preferences?.tone_enabled === false ? "tone-off" : "tone-on",
     preferences?.tone_prompt_preset_id ?? "none",
     preferences?.tone_prompt ?? "",
@@ -296,10 +297,10 @@ function App() {
       <div className="min-h-screen flex items-center justify-center">
         <div className="w-full max-w-sm px-6">
           <h1 className="text-3xl font-bold text-white mb-2 text-center">
-            ToneChat
+            Tchaikovskussy
           </h1>
           <p className="text-sm text-gray-500 mb-8 text-center">
-            Every message reshaped by the room&apos;s vibe
+            Communication-first chat with built-in language bridging
           </p>
 
           <div className="space-y-4">
@@ -379,6 +380,8 @@ function App() {
   const savePreferences = async (
     updates: Partial<{
       translation_enabled: boolean;
+      speaking_language: string;
+      perceiving_language: string;
       target_language: string;
       tone_enabled: boolean;
       tone_prompt_preset_id: string;
@@ -405,7 +408,7 @@ function App() {
       {/* Top bar */}
       <header className="flex items-center justify-between px-4 py-2 border-b border-gray-800 bg-gray-900">
         <div className="flex items-center gap-3">
-          <h1 className="text-sm font-bold text-white">ToneChat</h1>
+          <h1 className="text-sm font-bold text-white">Tchaikovskussy</h1>
           <span
             className={`w-2 h-2 rounded-full ${connected ? "bg-green-500" : "bg-red-500"}`}
           />
@@ -571,19 +574,19 @@ function App() {
                       className="accent-emerald-500"
                     />
                     <span className="text-sm text-gray-400">
-                      Translate messages for me
+                      Enable BabelFish translation
                     </span>
                   </label>
 
                   {preferences && personalizationAccess && (
                     <div>
                       <label className="block text-xs font-medium text-gray-500 mb-1">
-                        Target language
+                        I speak
                       </label>
                       <select
-                        value={preferences.target_language}
+                        value={preferences.speaking_language}
                         onChange={(e) => {
-                          void savePreferences({ target_language: e.target.value, translation_enabled: true });
+                          void savePreferences({ speaking_language: e.target.value, translation_enabled: true });
                         }}
                         disabled={preferencesSaving || personalizationAccess.available_languages.length === 0}
                         className="w-full bg-gray-800 text-white text-sm rounded-md px-3 py-2 border border-gray-700 focus:outline-none focus:border-emerald-500 transition-colors"
@@ -597,30 +600,28 @@ function App() {
                     </div>
                   )}
 
-                  {preferences && personalizationAccess && personalizationAccess.tone_prompt_presets.length > 0 && (
+                  {preferences && personalizationAccess && (
                     <div>
                       <label className="block text-xs font-medium text-gray-500 mb-1">
-                        Tone prompt preset
+                        I hear
                       </label>
                       <select
-                        value={preferences.tone_prompt_preset_id}
+                        value={preferences.perceiving_language}
                         onChange={(e) => {
-                          void savePreferences({ tone_prompt_preset_id: e.target.value });
+                          void savePreferences({ perceiving_language: e.target.value, translation_enabled: true });
                         }}
-                        disabled={preferencesSaving}
-                        className="w-full bg-gray-800 text-white text-sm rounded-md px-3 py-2 border border-gray-700 focus:outline-none focus:border-indigo-500 transition-colors"
+                        disabled={preferencesSaving || personalizationAccess.available_languages.length === 0}
+                        className="w-full bg-gray-800 text-white text-sm rounded-md px-3 py-2 border border-gray-700 focus:outline-none focus:border-emerald-500 transition-colors"
                       >
-                        {personalizationAccess.tone_prompt_presets.map((preset) => (
-                          <option key={preset.id} value={preset.id}>
-                            {preset.label}
+                        {personalizationAccess.available_languages.map((language) => (
+                          <option key={language} value={language}>
+                            {language}
                           </option>
                         ))}
                       </select>
-                      {personalizationAccess.tone_prompt_presets.find((preset) => preset.id === preferences.tone_prompt_preset_id)?.prompt && (
-                        <p className="text-xs text-gray-600 mt-1">
-                          {personalizationAccess.tone_prompt_presets.find((preset) => preset.id === preferences.tone_prompt_preset_id)?.prompt}
-                        </p>
-                      )}
+                      <p className="text-xs text-gray-600 mt-1">
+                        BabelFish mode translates every message into this language for you.
+                      </p>
                     </div>
                   )}
 
@@ -635,34 +636,9 @@ function App() {
                       className="accent-indigo-500"
                     />
                     <span className="text-sm text-gray-400">
-                      Apply tone modification for me
+                      Optional message polishing
                     </span>
                   </label>
-
-                  {preferences && personalizationAccess?.allow_user_tone_prompt_edit && (
-                    <div>
-                      <label className="block text-xs font-medium text-gray-500 mb-1">
-                        Custom tone prompt
-                      </label>
-                      <textarea
-                        value={preferences.tone_prompt}
-                        onChange={(e) => setPreferences((prev) => prev ? { ...prev, tone_prompt: e.target.value } : prev)}
-                        onBlur={(e) => {
-                          void savePreferences({ tone_prompt: e.target.value });
-                        }}
-                        rows={3}
-                        disabled={preferencesSaving}
-                        className="w-full bg-gray-800 text-white text-sm rounded-md px-3 py-2 border border-gray-700 focus:outline-none focus:border-indigo-500 transition-colors resize-none"
-                        placeholder="Optional: shape how the room tone should feel for you"
-                      />
-                    </div>
-                  )}
-
-                  {personalizationAccess && !personalizationAccess.allow_user_tone_prompt_edit && (
-                    <p className="text-xs text-gray-600">
-                      Admin has disabled custom tone prompts right now.
-                    </p>
-                  )}
 
                   {preferencesError && (
                     <p className="text-xs text-red-400">{preferencesError}</p>
@@ -687,13 +663,10 @@ function App() {
                       Role: <span className={myStats.role === "admin" ? "text-purple-400" : "text-gray-400"}>{myStats.role}</span>
                     </div>
                     <div>
-                      Translation: <span className="text-gray-400">{myStats.preferences.translation_enabled ? myStats.preferences.target_language : "off"}</span>
+                      Speak/Hear: <span className="text-gray-400">{myStats.preferences.speaking_language} {"->"} {myStats.preferences.translation_enabled ? myStats.preferences.perceiving_language : "off"}</span>
                     </div>
                     <div>
                       Tone: <span className="text-gray-400">{myStats.preferences.tone_enabled ? "on" : "off"}</span>
-                    </div>
-                    <div>
-                      Tone preset: <span className="text-gray-400">{myStats.preferences.tone_prompt_preset_id}</span>
                     </div>
                   </div>
                 </section>
@@ -708,7 +681,7 @@ function App() {
                     <div>
                       Tone: <span className="text-indigo-400">{tone.tone_name}</span> at {tone.strength}%
                     </div>
-                    <div className="text-gray-600">{tone.description}</div>
+                    <div className="text-gray-600">Legacy style layer still available on this branch while the fork is being split out.</div>
                   </div>
                 </section>
               )}

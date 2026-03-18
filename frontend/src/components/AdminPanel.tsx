@@ -75,7 +75,6 @@ export function AdminPanel({
   const [users, setUsers] = useState<UserSession[]>([]);
   const [usersLoading, setUsersLoading] = useState(false);
   const [languageListInput, setLanguageListInput] = useState("");
-  const [allowTonePromptEdit, setAllowTonePromptEdit] = useState(true);
   const [personalizationSaving, setPersonalizationSaving] = useState(false);
   const [tonePromptPresetText, setTonePromptPresetText] = useState("");
 
@@ -172,7 +171,6 @@ export function AdminPanel({
   useEffect(() => {
     if (personalizationAccess) {
       setLanguageListInput(personalizationAccess.available_languages.join(", "));
-      setAllowTonePromptEdit(personalizationAccess.allow_user_tone_prompt_edit);
       setTonePromptPresetText(
         personalizationAccess.tone_prompt_presets
           .map((preset) => `${preset.id}|${preset.label}|${preset.prompt}`)
@@ -303,7 +301,7 @@ export function AdminPanel({
         });
       const updated = await setPersonalizationAccess({
         available_languages: languages,
-        allow_user_tone_prompt_edit: allowTonePromptEdit,
+        allow_user_tone_prompt_edit: false,
         tone_prompt_presets: presets,
       });
       onPersonalizationAccessUpdate(updated);
@@ -333,15 +331,15 @@ export function AdminPanel({
   return (
     <div className="flex flex-col h-full overflow-y-auto">
       <div className="px-4 py-3 border-b border-gray-800 bg-gray-900/50">
-        <h2 className="text-lg font-semibold text-white">Admin</h2>
+        <h2 className="text-lg font-semibold text-white">Tchaikovskussy Admin</h2>
       </div>
 
       <div className="flex-1 px-4 py-4 space-y-6 overflow-y-auto">
         {/* ---- TONE SECTION ---- */}
         <section>
-          <h3 className="text-sm font-semibold text-gray-300 mb-3 uppercase tracking-wide">
-            Tone Profile
-          </h3>
+            <h3 className="text-sm font-semibold text-gray-300 mb-3 uppercase tracking-wide">
+              Legacy Style Layer
+            </h3>
 
           <div className="flex flex-wrap gap-1.5 mb-3">
             {Object.keys(tonePresets).map((name) => (
@@ -480,7 +478,7 @@ export function AdminPanel({
                       <>
                         <div className="px-3 py-1.5 bg-gray-800/50 border-b border-gray-800">
                           <span className="text-xs font-semibold text-amber-400/80 uppercase tracking-wide">
-                            Recommended for ToneChat
+                            Recommended for Tchaikovskussy
                           </span>
                         </div>
                         {favorites.map((fav) => {
@@ -968,7 +966,7 @@ export function AdminPanel({
 
         <section>
           <h3 className="text-sm font-semibold text-gray-300 mb-3 uppercase tracking-wide">
-            Personalization Access
+            BabelFish Access
           </h3>
           <div className="space-y-3">
             <div>
@@ -981,21 +979,9 @@ export function AdminPanel({
                 placeholder="English, Spanish, French"
               />
               <p className="text-xs text-gray-600 mt-1">
-                Comma-separated list shown to users for translation targets.
+                Comma-separated list shown to users for both speaking and hearing language choices.
               </p>
             </div>
-
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={allowTonePromptEdit}
-                onChange={(e) => setAllowTonePromptEdit(e.target.checked)}
-                className="accent-indigo-500"
-              />
-              <span className="text-sm text-gray-400">
-                Allow users to edit custom tone prompts
-              </span>
-            </label>
 
             <div>
               <label className={labelClass}>Tone Prompt Presets</label>
@@ -1004,10 +990,10 @@ export function AdminPanel({
                 onChange={(e) => setTonePromptPresetText(e.target.value)}
                 rows={5}
                 className={`${inputClass} resize-none`}
-                placeholder="none|No extra prompt|\ngentle|Gentle and calm|Keep the tone soft"
+                placeholder="none|None|"
               />
               <p className="text-xs text-gray-600 mt-1">
-                One preset per line as `id|label|prompt`.
+                Reserved for future tone work. BabelFish language controls are the primary feature now.
               </p>
             </div>
 

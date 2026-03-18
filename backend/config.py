@@ -296,6 +296,12 @@ class AppState:
             return self.personalization.available_languages[0]
         return DEFAULT_ALLOWED_LANGUAGES[0]
 
+    def default_speaking_language(self) -> str:
+        return self.default_target_language()
+
+    def default_perceiving_language(self) -> str:
+        return self.default_target_language()
+
     def default_tone_prompt_preset_id(self) -> str:
         if self.personalization.tone_prompt_presets:
             return self.personalization.tone_prompt_presets[0]["id"]
@@ -311,16 +317,28 @@ class AppState:
     def sanitize_user_preferences(self, user: dict) -> None:
         prefs = user.setdefault("preferences", {})
         prefs.setdefault("translation_enabled", False)
-        prefs.setdefault("target_language", self.default_target_language())
+        legacy_target_language = str(prefs.get("target_language", "")).strip()
+        prefs.setdefault("speaking_language", legacy_target_language or self.default_speaking_language())
+        prefs.setdefault("perceiving_language", legacy_target_language or self.default_perceiving_language())
+        prefs.setdefault("target_language", prefs.get("perceiving_language", self.default_perceiving_language()))
         prefs.setdefault("tone_enabled", True)
         prefs.setdefault("tone_prompt_preset_id", self.default_tone_prompt_preset_id())
         prefs.setdefault("tone_prompt", "")
 
-        target_language = str(prefs.get("target_language", "")).strip()
-        if target_language not in self.personalization.available_languages:
-            prefs["target_language"] = self.default_target_language()
+        speaking_language = str(prefs.get("speaking_language", "")).strip()
+        perceiving_language = str(prefs.get("perceiving_language", "")).strip()
+
+        if speaking_language not in self.personalization.available_languages:
+            prefs["speaking_language"] = self.default_speaking_language()
         else:
-            prefs["target_language"] = target_language
+            prefs["speaking_language"] = speaking_language
+
+        if perceiving_language not in self.personalization.available_languages:
+            prefs["perceiving_language"] = self.default_perceiving_language()
+        else:
+            prefs["perceiving_language"] = perceiving_language
+
+        prefs["target_language"] = prefs["perceiving_language"]
 
         prefs["translation_enabled"] = bool(prefs.get("translation_enabled", False))
         prefs["tone_enabled"] = bool(prefs.get("tone_enabled", True))
@@ -507,7 +525,9 @@ class AppState:
             "total_tokens_used": 0,
             "preferences": {
                 "translation_enabled": False,
-                "target_language": self.default_target_language(),
+                "speaking_language": self.default_speaking_language(),
+                "perceiving_language": self.default_perceiving_language(),
+                "target_language": self.default_perceiving_language(),
                 "tone_enabled": True,
                 "tone_prompt_preset_id": self.default_tone_prompt_preset_id(),
                 "tone_prompt": "",

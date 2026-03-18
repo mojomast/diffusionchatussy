@@ -35,6 +35,58 @@ import type {
   PersonalizationAccess,
 } from "./types";
 
+const DEFAULT_TONE_PROMPT_PRESETS = [
+  { id: "none", label: "No extra prompt", prompt: "" },
+];
+
+function normalizePreferences(preferences?: Partial<UserSession["preferences"]>) {
+  const legacyTarget = preferences?.target_language ?? "English";
+  return {
+    translation_enabled: preferences?.translation_enabled ?? false,
+    speaking_language: preferences?.speaking_language ?? legacyTarget,
+    perceiving_language: preferences?.perceiving_language ?? legacyTarget,
+    target_language: preferences?.perceiving_language ?? preferences?.target_language ?? "English",
+    tone_enabled: preferences?.tone_enabled ?? true,
+    tone_prompt_preset_id: preferences?.tone_prompt_preset_id ?? "none",
+    tone_prompt: preferences?.tone_prompt ?? "",
+  };
+}
+
+function normalizeAccess(access?: Partial<PersonalizationAccess>): PersonalizationAccess {
+  return {
+    available_languages: access?.available_languages?.length
+      ? access.available_languages
+      : ["English"],
+    allow_user_tone_prompt_edit: access?.allow_user_tone_prompt_edit ?? true,
+    tone_prompt_presets: access?.tone_prompt_presets?.length
+      ? access.tone_prompt_presets
+      : DEFAULT_TONE_PROMPT_PRESETS,
+  };
+}
+
+function normalizeSession(session: UserSession): UserSession {
+  return {
+    ...session,
+    preferences: normalizePreferences(session.preferences),
+  };
+}
+
+function normalizeMyStats(stats: MyStatsResponse): MyStatsResponse {
+  return {
+    ...stats,
+    preferences: normalizePreferences(stats.preferences),
+  };
+}
+
+function normalizePersonalizationResponse(
+  response: PersonalizationResponse
+): PersonalizationResponse {
+  return {
+    preferences: normalizePreferences(response.preferences),
+    access: normalizeAccess(response.access),
+  };
+}
+
 export async function getStatus(): Promise<StatusResponse> {
   return request<StatusResponse>("/");
 }
@@ -44,42 +96,48 @@ export async function getStatus(): Promise<StatusResponse> {
 export async function joinChat(
   username: string
 ): Promise<UserSession> {
-  return request<UserSession>("/auth/join", {
+  const res = await request<UserSession>("/auth/join", {
     method: "POST",
     body: JSON.stringify({ username }),
   });
+  return normalizeSession(res);
 }
 
 export async function getSession(): Promise<UserSession> {
-  return request<UserSession>("/auth/session");
+  return normalizeSession(await request<UserSession>("/auth/session"));
 }
 
 export async function adminLogin(
   password: string
 ): Promise<UserSession> {
-  return request<UserSession>("/auth/admin", {
+  const res = await request<UserSession>("/auth/admin", {
     method: "POST",
     body: JSON.stringify({ password }),
   });
+  return normalizeSession(res);
 }
 
 export async function getPreferences(): Promise<PersonalizationResponse> {
-  return request<PersonalizationResponse>("/preferences");
+  return normalizePersonalizationResponse(
+    await request<PersonalizationResponse>("/preferences")
+  );
 }
 
 export async function updatePreferences(
   preferences: Partial<{
     translation_enabled: boolean;
+    speaking_language: string;
+    perceiving_language: string;
     target_language: string;
     tone_enabled: boolean;
     tone_prompt_preset_id: string;
     tone_prompt: string;
   }>
 ): Promise<PersonalizationResponse> {
-  return request<PersonalizationResponse>("/preferences", {
+  return normalizePersonalizationResponse(await request<PersonalizationResponse>("/preferences", {
     method: "POST",
     body: JSON.stringify(preferences),
-  });
+  }));
 }
 
 // --- Chat ---
@@ -107,19 +165,23 @@ export async function getStats(): Promise<StatsResponse> {
 }
 
 export async function getMyStats(): Promise<MyStatsResponse> {
-  return request<MyStatsResponse>("/stats/me");
+  return normalizeMyStats(await request<MyStatsResponse>("/stats/me"));
 }
 
 // --- Admin: User Management ---
 
 export async function getUsers(): Promise<{ users: UserSession[]; total: number }> {
-  return request<{ users: UserSession[]; total: number }>("/admin/users", {
+  const res = await request<{ users: UserSession[]; total: number }>("/admin/users", {
     method: "POST",
   });
+  return {
+    ...res,
+    users: (res.users ?? []).map(normalizeSession),
+  };
 }
 
 export async function getPersonalizationAccess(): Promise<PersonalizationAccess> {
-  return request<PersonalizationAccess>("/admin/personalization");
+  return normalizeAccess(await request<PersonalizationAccess>("/admin/personalization"));
 }
 
 export async function setPersonalizationAccess(
@@ -129,10 +191,10 @@ export async function setPersonalizationAccess(
     tone_prompt_presets: Array<{ id: string; label: string; prompt: string }>;
   }>
 ): Promise<PersonalizationAccess> {
-  return request<PersonalizationAccess>("/admin/personalization", {
+  return normalizeAccess(await request<PersonalizationAccess>("/admin/personalization", {
     method: "POST",
     body: JSON.stringify(access),
-  });
+  }));
 }
 
 export async function setUserRole(
