@@ -29,3 +29,6 @@ frontend/.vite/
 
 # Logs
 *.log
+
+# Runtime data
+backend/data/

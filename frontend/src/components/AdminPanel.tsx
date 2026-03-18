@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import type { ToneConfig, ModelConfig, UserSession, ContextStats } from "../types";
+import type { ToneConfig, ModelConfig, UserSession, ContextStats, PersonalizationAccess } from "../types";
 import {
   setTone,
   setModel,
@@ -13,6 +13,7 @@ import {
   getUsers,
   setUserRole,
   kickUser,
+  setPersonalizationAccess,
 } from "../api";
 import type { OpenRouterModel, OpenRouterFavorite } from "../api";
 
@@ -23,6 +24,8 @@ interface AdminPanelProps {
   onModelUpdate: (m: ModelConfig) => void;
   showOriginals: boolean;
   onToggleOriginals: () => void;
+  personalizationAccess: PersonalizationAccess | null;
+  onPersonalizationAccessUpdate: (access: PersonalizationAccess) => void;
 }
 
 export function AdminPanel({
@@ -32,6 +35,8 @@ export function AdminPanel({
   onModelUpdate,
   showOriginals,
   onToggleOriginals,
+  personalizationAccess,
+  onPersonalizationAccessUpdate,
 }: AdminPanelProps) {
   const [tonePresets, setTonePresets] = useState<Record<string, string>>({});
   const [providerPresets, setProviderPresets] = useState<
@@ -69,6 +74,10 @@ export function AdminPanel({
   // --- User management state ---
   const [users, setUsers] = useState<UserSession[]>([]);
   const [usersLoading, setUsersLoading] = useState(false);
+  const [languageListInput, setLanguageListInput] = useState("");
+  const [allowTonePromptEdit, setAllowTonePromptEdit] = useState(true);
+  const [personalizationSaving, setPersonalizationSaving] = useState(false);
+  const [tonePromptPresetText, setTonePromptPresetText] = useState("");
 
   // OpenRouter model search state
   const [modelSearchQuery, setModelSearchQuery] = useState("");
@@ -159,6 +168,18 @@ export function AdminPanel({
       setTimeout_(model.timeout);
     }
   }, [model]);
+
+  useEffect(() => {
+    if (personalizationAccess) {
+      setLanguageListInput(personalizationAccess.available_languages.join(", "));
+      setAllowTonePromptEdit(personalizationAccess.allow_user_tone_prompt_edit);
+      setTonePromptPresetText(
+        personalizationAccess.tone_prompt_presets
+          .map((preset) => `${preset.id}|${preset.label}|${preset.prompt}`)
+          .join("\n")
+      );
+    }
+  }, [personalizationAccess]);
 
   const handleTonePreset = (name: string) => {
     setToneName(name);
@@ -258,6 +279,38 @@ export function AdminPanel({
       setUsers((prev) => prev.filter((u) => u.user_id !== userId));
     } catch (err) {
       console.error("Failed to kick user:", err);
+    }
+  };
+
+  const handleSavePersonalizationAccess = async () => {
+    setPersonalizationSaving(true);
+    try {
+      const languages = languageListInput
+        .split(",")
+        .map((language) => language.trim())
+        .filter(Boolean);
+      const presets = tonePromptPresetText
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .map((line) => {
+          const [id = "", label = "", ...promptParts] = line.split("|");
+          return {
+            id: id.trim(),
+            label: label.trim(),
+            prompt: promptParts.join("|").trim(),
+          };
+        });
+      const updated = await setPersonalizationAccess({
+        available_languages: languages,
+        allow_user_tone_prompt_edit: allowTonePromptEdit,
+        tone_prompt_presets: presets,
+      });
+      onPersonalizationAccessUpdate(updated);
+    } catch (err) {
+      console.error("Failed to save personalization access:", err);
+    } finally {
+      setPersonalizationSaving(false);
     }
   };
 
@@ -910,6 +963,61 @@ export function AdminPanel({
                 </div>
               </div>
             ))}
+          </div>
+        </section>
+
+        <section>
+          <h3 className="text-sm font-semibold text-gray-300 mb-3 uppercase tracking-wide">
+            Personalization Access
+          </h3>
+          <div className="space-y-3">
+            <div>
+              <label className={labelClass}>Allowed Languages</label>
+              <textarea
+                value={languageListInput}
+                onChange={(e) => setLanguageListInput(e.target.value)}
+                rows={3}
+                className={`${inputClass} resize-none`}
+                placeholder="English, Spanish, French"
+              />
+              <p className="text-xs text-gray-600 mt-1">
+                Comma-separated list shown to users for translation targets.
+              </p>
+            </div>
+
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={allowTonePromptEdit}
+                onChange={(e) => setAllowTonePromptEdit(e.target.checked)}
+                className="accent-indigo-500"
+              />
+              <span className="text-sm text-gray-400">
+                Allow users to edit custom tone prompts
+              </span>
+            </label>
+
+            <div>
+              <label className={labelClass}>Tone Prompt Presets</label>
+              <textarea
+                value={tonePromptPresetText}
+                onChange={(e) => setTonePromptPresetText(e.target.value)}
+                rows={5}
+                className={`${inputClass} resize-none`}
+                placeholder="none|No extra prompt|\ngentle|Gentle and calm|Keep the tone soft"
+              />
+              <p className="text-xs text-gray-600 mt-1">
+                One preset per line as `id|label|prompt`.
+              </p>
+            </div>
+
+            <button
+              onClick={handleSavePersonalizationAccess}
+              disabled={personalizationSaving}
+              className={`${btnClass} bg-emerald-600 text-white hover:bg-emerald-500`}
+            >
+              {personalizationSaving ? "Saving..." : "Apply Access Rules"}
+            </button>
           </div>
         </section>
 

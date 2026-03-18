@@ -14,6 +14,7 @@ Single-file server with:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -46,6 +47,13 @@ from models import (
     JoinRequest,
     AdminAuthRequest,
     SessionResponse,
+    UserPreferences,
+    UserSummaryResponse,
+    TonePromptPreset,
+    PersonalizationAccessResponse,
+    PersonalizationResponse,
+    UpdatePersonalizationRequest,
+    UpdatePersonalizationAccessRequest,
     GlobalStatsResponse,
     MyStatsResponse,
     UserStatsResponse,
@@ -53,7 +61,7 @@ from models import (
     ContextSettingsRequest,
     ContextStatsResponse,
 )
-from llm import rewrite_message, rewrite_message_diffusion, supports_diffusion, estimate_tokens
+from llm import rewrite_message, rewrite_message_diffusion, supports_diffusion, estimate_tokens, transform_message
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -208,6 +216,7 @@ def _tone_response() -> ToneResponse:
 
 
 def _session_response(user: dict) -> SessionResponse:
+    state.sanitize_user_preferences(user)
     return SessionResponse(
         user_id=user["user_id"],
         username=user["username"],
@@ -216,7 +225,209 @@ def _session_response(user: dict) -> SessionResponse:
         last_active=user["last_active"],
         total_messages=user["total_messages"],
         total_tokens_used=user["total_tokens_used"],
+        preferences=UserPreferences(**user["preferences"]),
     )
+
+
+def _personalization_access_response() -> PersonalizationAccessResponse:
+    return PersonalizationAccessResponse(
+        available_languages=state.personalization.available_languages,
+        allow_user_tone_prompt_edit=state.personalization.allow_user_tone_prompt_edit,
+        tone_prompt_presets=[TonePromptPreset(**preset) for preset in state.personalization.tone_prompt_presets],
+    )
+
+
+def _personalization_response(user: dict) -> PersonalizationResponse:
+    state.sanitize_user_preferences(user)
+    return PersonalizationResponse(
+        preferences=UserPreferences(**user["preferences"]),
+        access=_personalization_access_response(),
+    )
+
+
+def _user_transform_signature(user: Optional[dict]) -> tuple[bool, str, bool, str]:
+    """Return a stable personalization key for a recipient."""
+    if not user:
+        return False, "", True, ""
+
+    state.sanitize_user_preferences(user)
+    prefs = user["preferences"]
+    translation_enabled = bool(prefs.get("translation_enabled", False))
+    target_language = prefs.get("target_language", "") if translation_enabled else ""
+    tone_enabled = bool(prefs.get("tone_enabled", True))
+    tone_prompt = ""
+    preset_id = str(prefs.get("tone_prompt_preset_id", "")).strip()
+    preset = state.get_tone_prompt_preset(preset_id)
+    if preset and preset.get("prompt"):
+        tone_prompt = preset["prompt"]
+
+    if tone_enabled and state.personalization.allow_user_tone_prompt_edit:
+        custom_prompt = str(prefs.get("tone_prompt", "")).strip()
+        tone_prompt = "\n".join(part for part in [tone_prompt, custom_prompt] if part)
+
+    return translation_enabled, target_language, tone_enabled, tone_prompt
+
+
+def _is_default_transform_signature(signature: tuple[bool, str, bool, str]) -> bool:
+    """Check whether a recipient can reuse the canonical room-tone output."""
+    return signature == (False, "", True, "")
+
+
+def _update_user_preferences(user: dict, req: UpdatePersonalizationRequest) -> None:
+    """Apply validated personalization changes to a user record."""
+    state.sanitize_user_preferences(user)
+    prefs = user["preferences"]
+
+    if req.translation_enabled is not None:
+        prefs["translation_enabled"] = req.translation_enabled
+
+    if req.target_language is not None:
+        target_language = req.target_language.strip()
+        if target_language not in state.personalization.available_languages:
+            raise HTTPException(status_code=400, detail="Selected language is not available.")
+        prefs["target_language"] = target_language
+
+    if req.tone_enabled is not None:
+        prefs["tone_enabled"] = req.tone_enabled
+
+    if req.tone_prompt_preset_id is not None:
+        preset_id = req.tone_prompt_preset_id.strip()
+        if not state.get_tone_prompt_preset(preset_id):
+            raise HTTPException(status_code=400, detail="Selected tone prompt preset is not available.")
+        prefs["tone_prompt_preset_id"] = preset_id
+
+    if req.tone_prompt is not None:
+        if not state.personalization.allow_user_tone_prompt_edit:
+            raise HTTPException(status_code=403, detail="Custom tone prompts are disabled by admin.")
+        prefs["tone_prompt"] = req.tone_prompt.strip()[:500]
+
+    state.sanitize_user_preferences(user)
+    state.save_state()
+
+
+def _guess_language_name(text: str) -> str:
+    """Cheap heuristic for source-language labels shown in the UI."""
+    lowered = text.lower()
+    if any(char in text for char in "abcdefghijklmnopqrstuvwxyz"):
+        if any(word in lowered for word in [" the ", " and ", " you ", " are ", " this "]):
+            return "English"
+        if any(word in lowered for word in [" el ", " la ", " que ", " gracias", " por "]):
+            return "Spanish"
+        if any(word in lowered for word in [" le ", " la ", " merci", " avec ", " bonjour"]):
+            return "French"
+    if any("\u3040" <= char <= "\u30ff" for char in text):
+        return "Japanese"
+    if any("\uac00" <= char <= "\ud7af" for char in text):
+        return "Korean"
+    if any("\u0600" <= char <= "\u06ff" for char in text):
+        return "Arabic"
+    if any("\u4e00" <= char <= "\u9fff" for char in text):
+        return "Chinese"
+    return "Original"
+
+
+async def _build_personalized_chat_payload(
+    msg: ChatMessage,
+    msg_id: str,
+    signature: tuple[bool, str, bool, str],
+    use_diffusion: bool,
+    rewrite_status: str,
+    total_tokens: int,
+) -> dict:
+    """Build the final chat payload for one personalization bucket."""
+    translation_enabled, target_language, tone_enabled, tone_prompt = signature
+
+    if _is_default_transform_signature(signature):
+        message_text = msg.rewritten
+        personal_status = rewrite_status if not use_diffusion else "ok"
+    else:
+        transformed = await transform_message(
+            msg.original,
+            tone=state.tone,
+            tone_enabled=tone_enabled,
+            target_language=target_language if translation_enabled else None,
+            custom_tone_prompt=tone_prompt,
+            source_language=msg.source_language,
+        )
+        message_text = transformed.get("rewritten", msg.original)
+        personal_status = transformed.get("rewrite_status", "ok")
+
+    if translation_enabled and msg.source_language and target_language.casefold() == msg.source_language.casefold():
+        message_text = msg.original
+
+    return {
+        "type": "chat",
+        "msg_id": msg_id,
+        "user": msg.user,
+        "message": message_text,
+        "original": msg.original,
+        "timestamp": msg.timestamp,
+        "tone_name": msg.tone_name if tone_enabled and state.tone.strength > 0 else "",
+        "diffused": use_diffusion if _is_default_transform_signature(signature) else False,
+        "rewrite_status": personal_status,
+        "token_estimate": total_tokens,
+        "tone_applied": tone_enabled and state.tone.strength > 0,
+        "translation_language": target_language if translation_enabled else None,
+        "source_language": msg.source_language,
+    }
+
+
+async def broadcast_room_tone_only(payload: dict) -> None:
+    """Broadcast an event only to clients using the default room transform."""
+    dead: list[WebSocket] = []
+    message_text = json.dumps(payload)
+
+    for ws in state.websocket_clients:
+        session_id = state.websocket_sessions.get(id(ws))
+        recipient = state.get_user(session_id) if session_id else None
+        if not _is_default_transform_signature(_user_transform_signature(recipient)):
+            continue
+        try:
+            await ws.send_text(message_text)
+        except Exception:
+            dead.append(ws)
+
+    for ws in dead:
+        if ws in state.websocket_clients:
+            state.websocket_clients.remove(ws)
+        state.websocket_sessions.pop(id(ws), None)
+
+
+async def broadcast_chat_message(
+    msg: ChatMessage,
+    msg_id: str,
+    use_diffusion: bool,
+    rewrite_status: str,
+    total_tokens: int,
+) -> None:
+    """Broadcast a chat message, personalizing translation and tone per recipient."""
+    buckets: dict[tuple[bool, str, bool, str], list[WebSocket]] = {}
+
+    for ws in state.websocket_clients:
+        session_id = state.websocket_sessions.get(id(ws))
+        recipient = state.get_user(session_id) if session_id else None
+        signature = _user_transform_signature(recipient)
+        buckets.setdefault(signature, []).append(ws)
+
+    payloads = await asyncio.gather(*[
+        _build_personalized_chat_payload(msg, msg_id, signature, use_diffusion, rewrite_status, total_tokens)
+        for signature in buckets
+    ])
+    payload_map = dict(zip(buckets.keys(), payloads, strict=False))
+
+    dead: list[WebSocket] = []
+    for signature, sockets in buckets.items():
+        message_text = json.dumps(payload_map[signature])
+        for ws in sockets:
+            try:
+                await ws.send_text(message_text)
+            except Exception:
+                dead.append(ws)
+
+    for ws in dead:
+        if ws in state.websocket_clients:
+            state.websocket_clients.remove(ws)
+        state.websocket_sessions.pop(id(ws), None)
 
 # ---------------------------------------------------------------------------
 # WebSocket broadcast
@@ -236,6 +447,7 @@ async def broadcast(payload: dict) -> None:
     for ws in dead:
         if ws in state.websocket_clients:
             state.websocket_clients.remove(ws)
+        state.websocket_sessions.pop(id(ws), None)
 
 
 def _is_echo_of_recent_rewrite(message: str, lookback: int = 20) -> bool:
@@ -327,8 +539,8 @@ async def _process_message(user: str, message: str, session_id: Optional[str] = 
         system_prompt = build_rewrite_prompt(message, state.tone)
         tokens_in = estimate_tokens(system_prompt) + estimate_tokens(message)
 
-        # Tell clients a diffusion process is starting
-        await broadcast({
+        # Tell default room-tone clients a diffusion process is starting
+        await broadcast_room_tone_only({
             "type": "diffusion_start",
             "msg_id": msg_id,
             "user": user,
@@ -345,8 +557,8 @@ async def _process_message(user: str, message: str, session_id: Optional[str] = 
             final_text = denoised_state
             step_count += 1
 
-            # Broadcast each intermediate state to all clients
-            await broadcast({
+            # Broadcast each intermediate state to default room-tone clients
+            await broadcast_room_tone_only({
                 "type": "diffusion_step",
                 "msg_id": msg_id,
                 "user": user,
@@ -390,24 +602,16 @@ async def _process_message(user: str, message: str, session_id: Optional[str] = 
         tone_strength=state.tone.strength,
         tokens_in=tokens_in,
         tokens_out=tokens_out,
+        tone_applied=state.tone.strength > 0,
+        translation_language=None,
+        source_language=_guess_language_name(message),
     )
 
     # Store
     state.add_message(msg.model_dump())
 
-    # Broadcast the final resolved message
-    await broadcast({
-        "type": "chat",
-        "msg_id": msg_id,
-        "user": msg.user,
-        "message": msg.rewritten,
-        "original": msg.original,
-        "timestamp": msg.timestamp,
-        "tone_name": msg.tone_name,
-        "diffused": use_diffusion,
-        "rewrite_status": rewrite_status if not use_diffusion else "ok",
-        "token_estimate": total_tokens,
-    })
+    # Broadcast the final resolved message, personalized per recipient
+    await broadcast_chat_message(msg, msg_id, use_diffusion, rewrite_status, total_tokens)
 
     # Broadcast stats update after each message
     await broadcast({
@@ -465,6 +669,7 @@ async def join_chat(req: JoinRequest, request: Request):
         user = state.users[session_id]
         user["username"] = req.username
         user["last_active"] = time.time()
+        state.save_state()
     else:
         # Create new session
         session_id = str(uuid.uuid4())
@@ -480,6 +685,7 @@ async def join_chat(req: JoinRequest, request: Request):
         "user_id": user["user_id"],
         "username": user["username"],
         "timestamp": time.time(),
+        "user_count": state.get_active_user_count(),
     })
 
     logger.info(f"User joined: {req.username} (session={session_id[:8]}..., new={is_new})")
@@ -498,11 +704,46 @@ async def admin_auth(req: AdminAuthRequest, request: Request):
         raise HTTPException(status_code=403, detail="Invalid admin password.")
 
     user["role"] = "admin"
+    state.save_state()
     logger.info(f"Admin authenticated: {user['username']} (session={session_id[:8]}...)")
 
     response = JSONResponse(content=_session_response(user).model_dump())
     _set_session_cookie(response, session_id)
     return response
+
+
+@app.get("/preferences", response_model=PersonalizationResponse)
+async def get_preferences(request: Request):
+    """Get the current user's translation and tone preferences."""
+    _, user = _require_session(request)
+    return _personalization_response(user)
+
+
+@app.post("/preferences", response_model=PersonalizationResponse)
+async def update_preferences(req: UpdatePersonalizationRequest, request: Request):
+    """Update the current user's translation and tone preferences."""
+    _, user = _require_session(request)
+    _update_user_preferences(user, req)
+    return _personalization_response(user)
+
+
+@app.get("/admin/personalization", response_model=PersonalizationAccessResponse)
+async def get_personalization_access(request: Request):
+    """Get admin-managed personalization access controls."""
+    _require_admin(request)
+    return _personalization_access_response()
+
+
+@app.post("/admin/personalization", response_model=PersonalizationAccessResponse)
+async def update_personalization_access(req: UpdatePersonalizationAccessRequest, request: Request):
+    """Update admin-managed personalization access controls."""
+    _require_admin(request)
+    state.set_personalization(
+        available_languages=req.available_languages,
+        allow_user_tone_prompt_edit=req.allow_user_tone_prompt_edit,
+        tone_prompt_presets=[preset.model_dump() for preset in req.tone_prompt_presets] if req.tone_prompt_presets is not None else None,
+    )
+    return _personalization_access_response()
 
 
 # ---------------------------------------------------------------------------
@@ -519,14 +760,45 @@ async def send_message(req: SendMessageRequest, request: Request):
     if session_id and session_id in state.users:
         state.users[session_id]["username"] = req.user
         state.users[session_id]["last_active"] = time.time()
+        state.save_state()
 
     return await _process_message(req.user, req.message, session_id=session_id)
 
 
 @app.get("/messages")
-async def get_messages(limit: int = 100):
-    """Retrieve recent chat history."""
-    return state.get_messages(limit)
+async def get_messages(request: Request, limit: int = 100):
+    """Retrieve recent chat history personalized for the requesting user."""
+    session_id = _get_session_id(request)
+    user = state.get_user(session_id) if session_id else None
+    signature = _user_transform_signature(user)
+
+    history = state.get_messages(limit)
+    if _is_default_transform_signature(signature):
+        return history
+
+    personalized = []
+    for stored in history:
+        base_msg = ChatMessage(**stored)
+        payload = await _build_personalized_chat_payload(
+            base_msg,
+            str(uuid.uuid4())[:8],
+            signature,
+            use_diffusion=False,
+            rewrite_status="ok",
+            total_tokens=base_msg.tokens_in + base_msg.tokens_out,
+        )
+        personalized.append({
+            "user": base_msg.user,
+            "original": base_msg.original,
+            "rewritten": payload["message"],
+            "timestamp": base_msg.timestamp,
+            "tone_name": payload["tone_name"],
+            "token_estimate": payload["token_estimate"],
+            "tone_applied": payload["tone_applied"],
+            "translation_language": payload["translation_language"],
+            "source_language": payload["source_language"],
+        })
+    return personalized
 
 
 # ---------------------------------------------------------------------------
@@ -536,8 +808,10 @@ async def get_messages(limit: int = 100):
 @app.get("/stats", response_model=GlobalStatsResponse)
 async def get_global_stats():
     """Return global stats: total messages, tokens, active users, per-user breakdown."""
-    users_list = [
-        UserStatsResponse(
+    users_list = []
+    for uid, u in state.users.items():
+        state.sanitize_user_preferences(u)
+        users_list.append(UserStatsResponse(
             user_id=uid,
             username=u["username"],
             role=u["role"],
@@ -545,9 +819,8 @@ async def get_global_stats():
             last_active=u["last_active"],
             total_messages=u["total_messages"],
             total_tokens_used=u["total_tokens_used"],
-        )
-        for uid, u in state.users.items()
-    ]
+            preferences=UserPreferences(**u["preferences"]),
+        ))
     # Sort by total_messages descending
     users_list.sort(key=lambda u: u.total_messages, reverse=True)
 
@@ -574,6 +847,7 @@ async def get_my_stats(request: Request):
         total_tokens_used=user["total_tokens_used"],
         joined_at=user["joined_at"],
         last_active=user["last_active"],
+        preferences=UserPreferences(**user["preferences"]),
     )
 
 # ---------------------------------------------------------------------------
@@ -739,20 +1013,22 @@ async def list_users(request: Request):
     """List all users with stats. Admin only."""
     _require_admin(request)
 
-    users_list = []
+    users_list: list[UserSummaryResponse] = []
     for uid, u in state.users.items():
-        users_list.append({
-            "user_id": uid,
-            "username": u["username"],
-            "role": u["role"],
-            "joined_at": u["joined_at"],
-            "last_active": u["last_active"],
-            "total_messages": u["total_messages"],
-            "total_tokens_used": u["total_tokens_used"],
-        })
+        state.sanitize_user_preferences(u)
+        users_list.append(UserSummaryResponse(
+            user_id=uid,
+            username=u["username"],
+            role=u["role"],
+            joined_at=u["joined_at"],
+            last_active=u["last_active"],
+            total_messages=u["total_messages"],
+            total_tokens_used=u["total_tokens_used"],
+            preferences=UserPreferences(**u["preferences"]),
+        ))
 
     # Sort by last_active descending
-    users_list.sort(key=lambda u: u["last_active"], reverse=True)
+    users_list.sort(key=lambda u: u.last_active, reverse=True)
     return {"users": users_list, "total": len(users_list)}
 
 
@@ -766,6 +1042,7 @@ async def set_user_role(user_id: str, req: SetRoleRequest, request: Request):
         raise HTTPException(status_code=404, detail="User not found.")
 
     user["role"] = req.role
+    state.save_state()
     logger.info(f"User role updated: {user['username']} -> {req.role}")
     return {"status": "ok", "user_id": user_id, "role": req.role}
 
@@ -792,6 +1069,7 @@ async def kick_user(user_id: str, request: Request):
         "username": username,
         "reason": "kicked",
         "timestamp": time.time(),
+        "user_count": state.get_active_user_count(),
     })
 
     logger.info(f"User kicked: {username} (session={user_id[:8]}...)")
@@ -822,6 +1100,7 @@ async def reset_context(request: Request):
 
     msg_count = len(state.messages)
     state.messages.clear()
+    state.save_state()
     logger.info(f"Context reset by admin: {msg_count} messages cleared")
 
     # Broadcast context_reset event
@@ -851,6 +1130,7 @@ async def update_context_settings(req: ContextSettingsRequest, request: Request)
         state.context_settings["max_tokens_per_user"] = req.max_tokens_per_user
 
     logger.info(f"Context settings updated: {state.context_settings}")
+    state.save_state()
 
     return {
         "status": "ok",
@@ -876,6 +1156,7 @@ async def websocket_chat(websocket: WebSocket):
         if ws_user:
             ws_user["last_active"] = time.time()
             logger.info(f"WebSocket identified user: {ws_user['username']} (session={ws_session_id[:8]}...)")
+    state.websocket_sessions[id(websocket)] = ws_session_id
 
     try:
         while True:
@@ -907,6 +1188,7 @@ async def websocket_chat(websocket: WebSocket):
     finally:
         if websocket in state.websocket_clients:
             state.websocket_clients.remove(websocket)
+        state.websocket_sessions.pop(id(websocket), None)
 
         # Broadcast user_left if we had a tracked session
         if ws_user:
@@ -916,6 +1198,7 @@ async def websocket_chat(websocket: WebSocket):
                 "username": ws_user.get("username", "Unknown"),
                 "reason": "disconnected",
                 "timestamp": time.time(),
+                "user_count": state.get_active_user_count(),
             })
 
         logger.info(f"WebSocket client disconnected ({len(state.websocket_clients)} total)")

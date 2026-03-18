@@ -31,6 +31,8 @@ import type {
   StatsResponse,
   MyStatsResponse,
   ContextStats,
+  PersonalizationResponse,
+  PersonalizationAccess,
 } from "./types";
 
 export async function getStatus(): Promise<StatusResponse> {
@@ -61,6 +63,25 @@ export async function adminLogin(
   });
 }
 
+export async function getPreferences(): Promise<PersonalizationResponse> {
+  return request<PersonalizationResponse>("/preferences");
+}
+
+export async function updatePreferences(
+  preferences: Partial<{
+    translation_enabled: boolean;
+    target_language: string;
+    tone_enabled: boolean;
+    tone_prompt_preset_id: string;
+    tone_prompt: string;
+  }>
+): Promise<PersonalizationResponse> {
+  return request<PersonalizationResponse>("/preferences", {
+    method: "POST",
+    body: JSON.stringify(preferences),
+  });
+}
+
 // --- Chat ---
 
 export async function sendMessage(
@@ -75,7 +96,7 @@ export async function sendMessage(
 
 export async function getMessages(
   limit = 100
-): Promise<Array<{ user: string; original: string; rewritten: string; timestamp: number; tone_name: string; token_estimate?: number }>> {
+): Promise<Array<{ user: string; original: string; rewritten: string; timestamp: number; tone_name: string; token_estimate?: number; tone_applied?: boolean; translation_language?: string | null; source_language?: string | null }>> {
   return request(`/messages?limit=${limit}`);
 }
 
@@ -94,6 +115,23 @@ export async function getMyStats(): Promise<MyStatsResponse> {
 export async function getUsers(): Promise<{ users: UserSession[]; total: number }> {
   return request<{ users: UserSession[]; total: number }>("/admin/users", {
     method: "POST",
+  });
+}
+
+export async function getPersonalizationAccess(): Promise<PersonalizationAccess> {
+  return request<PersonalizationAccess>("/admin/personalization");
+}
+
+export async function setPersonalizationAccess(
+  access: Partial<{
+    available_languages: string[];
+    allow_user_tone_prompt_edit: boolean;
+    tone_prompt_presets: Array<{ id: string; label: string; prompt: string }>;
+  }>
+): Promise<PersonalizationAccess> {
+  return request<PersonalizationAccess>("/admin/personalization", {
+    method: "POST",
+    body: JSON.stringify(access),
   });
 }
 

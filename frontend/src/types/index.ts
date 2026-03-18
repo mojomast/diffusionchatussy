@@ -12,6 +12,9 @@ export interface ChatMessage {
   diffused?: boolean;     // true if this message went through real diffusion
   rewrite_status?: "ok" | "passthrough" | "no_key" | "error";
   token_estimate?: number; // estimated token count for this message
+  tone_applied?: boolean;
+  translation_language?: string | null;
+  source_language?: string | null;
 }
 
 export interface ToneConfig {
@@ -55,6 +58,32 @@ export interface UserSession {
   last_active: number;
   total_messages: number;
   total_tokens_used: number;
+  preferences: UserPreferences;
+}
+
+export interface UserPreferences {
+  translation_enabled: boolean;
+  target_language: string;
+  tone_enabled: boolean;
+  tone_prompt_preset_id: string;
+  tone_prompt: string;
+}
+
+export interface TonePromptPreset {
+  id: string;
+  label: string;
+  prompt: string;
+}
+
+export interface PersonalizationAccess {
+  available_languages: string[];
+  allow_user_tone_prompt_edit: boolean;
+  tone_prompt_presets: TonePromptPreset[];
+}
+
+export interface PersonalizationResponse {
+  preferences: UserPreferences;
+  access: PersonalizationAccess;
 }
 
 export interface StatsResponse {
@@ -65,11 +94,14 @@ export interface StatsResponse {
 }
 
 export interface MyStatsResponse {
+  user_id: string;
   username: string;
   role: "user" | "admin";
   total_messages: number;
   total_tokens_used: number;
   joined_at: number;
+  last_active: number;
+  preferences: UserPreferences;
 }
 
 export interface ContextStats {
@@ -119,6 +151,9 @@ export interface WSChatMessage {
   diffused?: boolean;
   rewrite_status?: "ok" | "passthrough" | "no_key" | "error";
   token_estimate?: number;
+  tone_applied?: boolean;
+  translation_language?: string | null;
+  source_language?: string | null;
 }
 
 export interface WSDiffusionStart {

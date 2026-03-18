@@ -29,6 +29,9 @@ class ChatMessage(BaseModel):
     tone_strength: int
     tokens_in: int = 0
     tokens_out: int = 0
+    tone_applied: bool = True
+    translation_language: Optional[str] = None
+    source_language: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -51,6 +54,50 @@ class SessionResponse(BaseModel):
     last_active: float
     total_messages: int
     total_tokens_used: int
+    preferences: "UserPreferences"
+
+
+# ---------------------------------------------------------------------------
+# Personalization
+# ---------------------------------------------------------------------------
+
+class UserPreferences(BaseModel):
+    translation_enabled: bool
+    target_language: str
+    tone_enabled: bool
+    tone_prompt_preset_id: str
+    tone_prompt: str
+
+
+class TonePromptPreset(BaseModel):
+    id: str
+    label: str
+    prompt: str
+
+
+class PersonalizationAccessResponse(BaseModel):
+    available_languages: list[str]
+    allow_user_tone_prompt_edit: bool
+    tone_prompt_presets: list[TonePromptPreset]
+
+
+class PersonalizationResponse(BaseModel):
+    preferences: UserPreferences
+    access: PersonalizationAccessResponse
+
+
+class UpdatePersonalizationRequest(BaseModel):
+    translation_enabled: Optional[bool] = None
+    target_language: Optional[str] = Field(None, max_length=100)
+    tone_enabled: Optional[bool] = None
+    tone_prompt_preset_id: Optional[str] = Field(None, max_length=100)
+    tone_prompt: Optional[str] = Field(None, max_length=500)
+
+
+class UpdatePersonalizationAccessRequest(BaseModel):
+    available_languages: Optional[list[str]] = None
+    allow_user_tone_prompt_edit: Optional[bool] = None
+    tone_prompt_presets: Optional[list[TonePromptPreset]] = None
 
 
 # ---------------------------------------------------------------------------
@@ -114,6 +161,7 @@ class UserStatsResponse(BaseModel):
     last_active: float
     total_messages: int
     total_tokens_used: int
+    preferences: UserPreferences
 
 
 class GlobalStatsResponse(BaseModel):
@@ -133,6 +181,18 @@ class MyStatsResponse(BaseModel):
     total_tokens_used: int
     joined_at: float
     last_active: float
+    preferences: UserPreferences
+
+
+class UserSummaryResponse(BaseModel):
+    user_id: str
+    username: str
+    role: str
+    joined_at: float
+    last_active: float
+    total_messages: int
+    total_tokens_used: int
+    preferences: UserPreferences
 
 
 # ---------------------------------------------------------------------------
@@ -170,6 +230,8 @@ class WSChatPayload(BaseModel):
     original: Optional[str] = None  # Sent to all clients; frontend controls visibility via showOriginals toggle
     timestamp: float
     tone_name: str
+    translation_language: Optional[str] = None
+    source_language: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------

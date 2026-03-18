@@ -3,10 +3,11 @@ import type { WSMessage } from "../types";
 
 type MessageHandler = (msg: WSMessage) => void;
 
-export function useWebSocket(onMessage: MessageHandler) {
+export function useWebSocket(onMessage: MessageHandler, reconnectKey?: string) {
   const wsRef = useRef<WebSocket | null>(null);
   const [connected, setConnected] = useState(false);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout>>();
+  const shouldReconnectRef = useRef(true);
   const handlersRef = useRef(onMessage);
   handlersRef.current = onMessage;
 
@@ -24,7 +25,9 @@ export function useWebSocket(onMessage: MessageHandler) {
     ws.onclose = () => {
       setConnected(false);
       // Auto-reconnect after 2 seconds
-      reconnectTimer.current = setTimeout(connect, 2000);
+      if (shouldReconnectRef.current) {
+        reconnectTimer.current = setTimeout(connect, 2000);
+      }
     };
 
     ws.onerror = () => {
@@ -44,12 +47,14 @@ export function useWebSocket(onMessage: MessageHandler) {
   }, []);
 
   useEffect(() => {
+    shouldReconnectRef.current = true;
     connect();
     return () => {
+      shouldReconnectRef.current = false;
       clearTimeout(reconnectTimer.current);
       wsRef.current?.close();
     };
-  }, [connect]);
+  }, [connect, reconnectKey]);
 
   const send = useCallback((data: Record<string, unknown>) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {

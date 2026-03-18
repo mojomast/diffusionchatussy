@@ -2,7 +2,16 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import { Chat } from "./components/Chat";
 import { AdminPanel } from "./components/AdminPanel";
 import { useWebSocket } from "./hooks/useWebSocket";
-import { getStatus, getMessages, joinChat, adminLogin, getMyStats } from "./api";
+import {
+  getStatus,
+  getMessages,
+  joinChat,
+  adminLogin,
+  getMyStats,
+  getPreferences,
+  updatePreferences,
+  getPersonalizationAccess,
+} from "./api";
 import type {
   ChatMessage,
   ToneConfig,
@@ -12,6 +21,8 @@ import type {
   UserSession,
   DisplayMessage,
   MyStatsResponse,
+  PersonalizationAccess,
+  UserPreferences,
 } from "./types";
 
 function App() {
@@ -32,6 +43,10 @@ function App() {
   // Session from backend auth
   const [session, setSession] = useState<UserSession | null>(null);
   const [myStats, setMyStats] = useState<MyStatsResponse | null>(null);
+  const [preferences, setPreferences] = useState<UserPreferences | null>(null);
+  const [personalizationAccess, setPersonalizationAccess] = useState<PersonalizationAccess | null>(null);
+  const [preferencesSaving, setPreferencesSaving] = useState(false);
+  const [preferencesError, setPreferencesError] = useState("");
 
   // Live stats from WS stats_update events
   const [liveStats, setLiveStats] = useState<{
@@ -61,6 +76,22 @@ function App() {
       timestamp: Date.now() / 1000,
     };
     setDisplayMessages((prev) => [...prev, sysMsg]);
+  }, []);
+
+  const applyHistory = useCallback((msgs: Array<{ user: string; original: string; rewritten: string; timestamp: number; tone_name: string; token_estimate?: number; tone_applied?: boolean; translation_language?: string | null; source_language?: string | null }>) => {
+    const chatMsgs: ChatMessage[] = msgs.map((m) => ({
+      user: m.user,
+      message: m.rewritten,
+      original: m.original,
+      timestamp: m.timestamp,
+      tone_name: m.tone_name,
+      token_estimate: m.token_estimate,
+      tone_applied: m.tone_applied,
+      translation_language: m.translation_language,
+      source_language: m.source_language,
+    }));
+    setMessages(chatMsgs);
+    setDisplayMessages(chatMsgs.map((cm) => ({ ...cm, kind: "chat" as const })));
   }, []);
 
   // Handle incoming WebSocket messages
@@ -112,6 +143,9 @@ function App() {
             diffused: msg.diffused,
             rewrite_status: msg.rewrite_status,
             token_estimate: msg.token_estimate,
+            tone_applied: msg.tone_applied,
+            translation_language: msg.translation_language,
+            source_language: msg.source_language,
           };
           setMessages((prev) => [...prev, chatMsg]);
 
@@ -177,7 +211,20 @@ function App() {
     [addSystemMessage]
   );
 
-  const { connected } = useWebSocket(handleWS);
+  const websocketKey = [
+    session?.user_id ?? "guest",
+    preferences?.translation_enabled ? preferences.target_language : "no-translation",
+    preferences?.tone_enabled === false ? "tone-off" : "tone-on",
+    preferences?.tone_prompt_preset_id ?? "none",
+    preferences?.tone_prompt ?? "",
+  ].join("::");
+
+  const { connected } = useWebSocket(handleWS, websocketKey);
+
+  useEffect(() => {
+    if (!enteredChat) return;
+    getMessages().then(applyHistory).catch(() => { /* ignore */ });
+  }, [enteredChat, websocketKey, applyHistory]);
 
   // Load initial state
   useEffect(() => {
@@ -194,28 +241,21 @@ function App() {
       .catch(console.error);
 
     getMessages()
-      .then((msgs) => {
-        const chatMsgs: ChatMessage[] = msgs.map((m) => ({
-          user: m.user,
-          message: m.rewritten,
-          original: m.original,
-          timestamp: m.timestamp,
-          tone_name: m.tone_name,
-          token_estimate: m.token_estimate,
-        }));
-        setMessages(chatMsgs);
-        setDisplayMessages(
-          chatMsgs.map((cm) => ({ ...cm, kind: "chat" as const }))
-        );
-      })
+      .then(applyHistory)
       .catch(console.error);
-  }, []);
+  }, [applyHistory]);
 
   // Periodically refresh personal stats when in chat
   useEffect(() => {
     if (!enteredChat) return;
     const fetchStats = () => {
       getMyStats().then(setMyStats).catch(() => { /* ignore if endpoint not available */ });
+      getPreferences()
+        .then((res) => {
+          setPreferences(res.preferences);
+          setPersonalizationAccess(res.access);
+        })
+        .catch(() => { /* ignore */ });
     };
     fetchStats();
     const interval = setInterval(fetchStats, 15000);
@@ -230,8 +270,16 @@ function App() {
     try {
       const userSession = await joinChat(trimmed);
       setSession(userSession);
+      setPreferences(userSession.preferences);
       setAdminAuthed(userSession.role === "admin");
       setEnteredChat(true);
+      Promise.all([getPreferences(), getMessages()])
+        .then(([res, msgs]) => {
+          setPreferences(res.preferences);
+          setPersonalizationAccess(res.access);
+          applyHistory(msgs);
+        })
+        .catch(() => { /* ignore */ });
     } catch (err) {
       // Fallback: if auth endpoint doesn't exist yet, join client-side only
       if (err instanceof Error && err.message.includes("404")) {
@@ -299,9 +347,11 @@ function App() {
     try {
       const updatedSession = await adminLogin(adminPassInput);
       setSession(updatedSession);
+      setPreferences(updatedSession.preferences);
       setAdminAuthed(true);
       setShowAdmin(true);
       setAdminPassInput("");
+      getPersonalizationAccess().then(setPersonalizationAccess).catch(() => { /* ignore */ });
     } catch (err) {
       // Fallback: if auth endpoint doesn't exist, try client-side check
       if (err instanceof Error && err.message.includes("404")) {
@@ -323,6 +373,29 @@ function App() {
       setShowAdmin(!showAdmin);
     } else {
       setShowAdmin(!showAdmin); // Show the password prompt
+    }
+  };
+
+  const savePreferences = async (
+    updates: Partial<{
+      translation_enabled: boolean;
+      target_language: string;
+      tone_enabled: boolean;
+      tone_prompt_preset_id: string;
+      tone_prompt: string;
+    }>
+  ) => {
+    setPreferencesSaving(true);
+    setPreferencesError("");
+    try {
+      const res = await updatePreferences(updates);
+      setPreferences(res.preferences);
+      setPersonalizationAccess(res.access);
+      applyHistory(await getMessages());
+    } catch (err) {
+      setPreferencesError(err instanceof Error ? err.message : "Failed to save preferences");
+    } finally {
+      setPreferencesSaving(false);
     }
   };
 
@@ -457,6 +530,8 @@ function App() {
               onModelUpdate={setModel}
               showOriginals={showOriginals}
               onToggleOriginals={() => setShowOriginals(!showOriginals)}
+              personalizationAccess={personalizationAccess}
+              onPersonalizationAccessUpdate={setPersonalizationAccess}
             />
           </div>
         )}
@@ -470,9 +545,9 @@ function App() {
             <div className="px-4 py-4 space-y-4">
               <section>
                 <h3 className="text-sm font-semibold text-gray-300 mb-3 uppercase tracking-wide">
-                  Display
+                  Personalization
                 </h3>
-                <div className="space-y-2">
+                <div className="space-y-3">
                   <label className="flex items-center gap-2 cursor-pointer">
                     <input
                       type="checkbox"
@@ -484,6 +559,114 @@ function App() {
                       Show original messages
                     </span>
                   </label>
+
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={preferences?.translation_enabled ?? false}
+                      onChange={(e) => {
+                        void savePreferences({ translation_enabled: e.target.checked });
+                      }}
+                      disabled={preferencesSaving || !preferences}
+                      className="accent-emerald-500"
+                    />
+                    <span className="text-sm text-gray-400">
+                      Translate messages for me
+                    </span>
+                  </label>
+
+                  {preferences && personalizationAccess && (
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 mb-1">
+                        Target language
+                      </label>
+                      <select
+                        value={preferences.target_language}
+                        onChange={(e) => {
+                          void savePreferences({ target_language: e.target.value, translation_enabled: true });
+                        }}
+                        disabled={preferencesSaving || personalizationAccess.available_languages.length === 0}
+                        className="w-full bg-gray-800 text-white text-sm rounded-md px-3 py-2 border border-gray-700 focus:outline-none focus:border-emerald-500 transition-colors"
+                      >
+                        {personalizationAccess.available_languages.map((language) => (
+                          <option key={language} value={language}>
+                            {language}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
+                  {preferences && personalizationAccess && personalizationAccess.tone_prompt_presets.length > 0 && (
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 mb-1">
+                        Tone prompt preset
+                      </label>
+                      <select
+                        value={preferences.tone_prompt_preset_id}
+                        onChange={(e) => {
+                          void savePreferences({ tone_prompt_preset_id: e.target.value });
+                        }}
+                        disabled={preferencesSaving}
+                        className="w-full bg-gray-800 text-white text-sm rounded-md px-3 py-2 border border-gray-700 focus:outline-none focus:border-indigo-500 transition-colors"
+                      >
+                        {personalizationAccess.tone_prompt_presets.map((preset) => (
+                          <option key={preset.id} value={preset.id}>
+                            {preset.label}
+                          </option>
+                        ))}
+                      </select>
+                      {personalizationAccess.tone_prompt_presets.find((preset) => preset.id === preferences.tone_prompt_preset_id)?.prompt && (
+                        <p className="text-xs text-gray-600 mt-1">
+                          {personalizationAccess.tone_prompt_presets.find((preset) => preset.id === preferences.tone_prompt_preset_id)?.prompt}
+                        </p>
+                      )}
+                    </div>
+                  )}
+
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={preferences?.tone_enabled ?? true}
+                      onChange={(e) => {
+                        void savePreferences({ tone_enabled: e.target.checked });
+                      }}
+                      disabled={preferencesSaving || !preferences}
+                      className="accent-indigo-500"
+                    />
+                    <span className="text-sm text-gray-400">
+                      Apply tone modification for me
+                    </span>
+                  </label>
+
+                  {preferences && personalizationAccess?.allow_user_tone_prompt_edit && (
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 mb-1">
+                        Custom tone prompt
+                      </label>
+                      <textarea
+                        value={preferences.tone_prompt}
+                        onChange={(e) => setPreferences((prev) => prev ? { ...prev, tone_prompt: e.target.value } : prev)}
+                        onBlur={(e) => {
+                          void savePreferences({ tone_prompt: e.target.value });
+                        }}
+                        rows={3}
+                        disabled={preferencesSaving}
+                        className="w-full bg-gray-800 text-white text-sm rounded-md px-3 py-2 border border-gray-700 focus:outline-none focus:border-indigo-500 transition-colors resize-none"
+                        placeholder="Optional: shape how the room tone should feel for you"
+                      />
+                    </div>
+                  )}
+
+                  {personalizationAccess && !personalizationAccess.allow_user_tone_prompt_edit && (
+                    <p className="text-xs text-gray-600">
+                      Admin has disabled custom tone prompts right now.
+                    </p>
+                  )}
+
+                  {preferencesError && (
+                    <p className="text-xs text-red-400">{preferencesError}</p>
+                  )}
                 </div>
               </section>
 
@@ -502,6 +685,15 @@ function App() {
                     </div>
                     <div>
                       Role: <span className={myStats.role === "admin" ? "text-purple-400" : "text-gray-400"}>{myStats.role}</span>
+                    </div>
+                    <div>
+                      Translation: <span className="text-gray-400">{myStats.preferences.translation_enabled ? myStats.preferences.target_language : "off"}</span>
+                    </div>
+                    <div>
+                      Tone: <span className="text-gray-400">{myStats.preferences.tone_enabled ? "on" : "off"}</span>
+                    </div>
+                    <div>
+                      Tone preset: <span className="text-gray-400">{myStats.preferences.tone_prompt_preset_id}</span>
                     </div>
                   </div>
                 </section>

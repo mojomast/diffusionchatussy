@@ -166,6 +166,21 @@ export function Chat({
                     [{msg.tone_name}]
                   </span>
                 )}
+                {msg.translation_language && (
+                  <span className="text-xs text-emerald-400">
+                    [{msg.translation_language}]
+                  </span>
+                )}
+                {msg.source_language && msg.translation_language && msg.source_language !== msg.translation_language && (
+                  <span className="text-xs text-cyan-400">
+                    [from {msg.source_language}]
+                  </span>
+                )}
+                {msg.tone_applied === false && (
+                  <span className="text-xs text-amber-400">
+                    [tone off]
+                  </span>
+                )}
                 {msg.diffused && (
                   <span className="text-xs text-purple-600">
                     [diffused]
@@ -197,7 +212,7 @@ export function Chat({
                 msg.original &&
                 msg.original !== msg.message && (
                   <div className="mt-1 max-w-[75%] px-3 py-1 rounded-lg bg-gray-900/50 border border-gray-800 text-xs text-gray-500 italic">
-                    Original: {msg.original}
+                    Original{msg.source_language ? ` (${msg.source_language})` : ""}: {msg.original}
                   </div>
                 )}
             </div>
